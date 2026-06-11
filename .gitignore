@@ -1,0 +1,65 @@
+# ─── SECRETS — NEVER COMMIT ──────────────────────────────────────────────────
+backend/serviceAccountKey.json
+backend/.env
+backend/.env.*
+!backend/.env.example
+frontend/.env.local
+frontend/.env*.local
+!frontend/.env.local.example
+*.pem
+*.p12
+*.key
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+backend/venv/
+backend/.venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.log
+
+# ─── ML artifacts: binary data files (not needed at runtime) ──────────────────
+*.pkl
+*.parquet
+
+# ─── ML artifacts: model weights ──────────────────────────────────────────────
+# KEEP: backend/artifacts/scaler.joblib (4 KB — needed at startup)
+# KEEP: backend/artifacts/transformer_behaviour_best.joblib (1.9 MB — our model)
+# EXCLUDE: yolov8s.pt (22 MB — download at deploy time from Ultralytics)
+# EXCLUDE: duplicate .joblib files in docs/
+backend/artifacts/yolov8s.pt
+docs/*.joblib
+
+# ─── Training data (stored in docs/ — not needed to run the app) ──────────────
+docs/window_features.*
+docs/.ipynb_checkpoints/
+
+# ─── Node / Next.js ───────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+*.tsbuildinfo
+
+# ─── macOS / Windows ──────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+
+# ─── Editor ───────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.claude/
