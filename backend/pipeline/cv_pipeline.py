@@ -22,6 +22,24 @@ import numpy as np
 
 from constants import SAMPLE_EVERY
 
+# COCO class names (indices 1-79, class 0 = person handled separately)
+_COCO_NAMES: Dict[int, str] = {
+    1:"bicycle",2:"car",3:"motorcycle",4:"airplane",5:"bus",6:"train",7:"truck",
+    8:"boat",9:"traffic light",10:"fire hydrant",11:"stop sign",12:"parking meter",
+    13:"bench",14:"bird",15:"cat",16:"dog",17:"horse",18:"sheep",19:"cow",
+    20:"elephant",21:"bear",22:"zebra",23:"giraffe",24:"backpack",25:"umbrella",
+    26:"handbag",27:"tie",28:"suitcase",29:"frisbee",30:"skis",31:"snowboard",
+    32:"sports ball",33:"kite",34:"baseball bat",35:"baseball glove",36:"skateboard",
+    37:"surfboard",38:"tennis racket",39:"bottle",40:"wine glass",41:"cup",
+    42:"fork",43:"knife",44:"spoon",45:"bowl",46:"banana",47:"apple",
+    48:"sandwich",49:"orange",50:"broccoli",51:"carrot",52:"hot dog",53:"pizza",
+    54:"donut",55:"cake",56:"chair",57:"couch",58:"potted plant",59:"bed",
+    60:"dining table",61:"toilet",62:"tv",63:"laptop",64:"mouse",65:"remote",
+    66:"keyboard",67:"cell phone",68:"microwave",69:"oven",70:"toaster",
+    71:"sink",72:"refrigerator",73:"book",74:"clock",75:"vase",76:"scissors",
+    77:"teddy bear",78:"hair drier",79:"toothbrush",
+}
+
 logger = logging.getLogger(__name__)
 
 _mp_pose      = mp.solutions.pose
@@ -59,7 +77,8 @@ class PerConnectionTracker:
             max_num_hands=2,
             min_detection_confidence=0.5,
         )
-        self.frame_count: int = 0
+        self.frame_count:  int  = 0
+        self.last_products: List[Dict[str, Any]] = []  # cached so we don't blink every 2/3 frames
 
     def close(self) -> None:
         self.pose.close()
@@ -86,17 +105,20 @@ def decode_frame(b64_data: str) -> Optional[np.ndarray]:
 def process_frame(
     frame: np.ndarray,
     tracker: PerConnectionTracker,
-) -> List[Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Run YOLOv8+ByteTrack on every frame; run MediaPipe every SAMPLE_EVERY frames.
-    Returns one observation dict per detected+tracked person.
+    Returns (person_observations, product_detections).
+
+    person_observations : one dict per tracked person (with MediaPipe features).
+    product_detections  : one dict per non-person object {box, class_id, label, conf}.
 
     This function is blocking and must be called via run_in_executor.
     """
     tracker.frame_count += 1
     do_mediapipe = (tracker.frame_count % SAMPLE_EVERY == 0)
 
-    # ── YOLOv8 + ByteTrack ────────────────────────────────────────────────────
+    # ── YOLOv8 + ByteTrack (persons only) ────────────────────────────────────
     results = tracker.yolo.track(
         frame,
         persist=True,
@@ -107,7 +129,10 @@ def process_frame(
 
     observations: List[Dict[str, Any]] = []
     if not results or results[0].boxes is None or results[0].boxes.id is None:
-        return observations
+        # Still detect products even if no persons found; cache so non-detection frames don't blink
+        if do_mediapipe:
+            tracker.last_products = _detect_products(frame, tracker)
+        return observations, tracker.last_products
 
     boxes    = results[0].boxes
     track_ids: np.ndarray = boxes.id.cpu().numpy().astype(int)
@@ -150,7 +175,63 @@ def process_frame(
         obs.update(_compute_social(tid, centres))
         observations.append(obs)
 
-    return observations
+    # ── Product detection (every SAMPLE_EVERY frames) ─────────────────────────
+    # Cache the result so non-detection frames return stable boxes instead of []
+    if do_mediapipe:
+        tracker.last_products = _detect_products(frame, tracker)
+    products = tracker.last_products
+
+    return observations, products
+
+
+# ── Product detection ─────────────────────────────────────────────────────────
+
+def _detect_products(
+    frame: np.ndarray,
+    tracker: PerConnectionTracker,
+    conf_threshold: float = 0.35,
+) -> List[Dict[str, Any]]:
+    """
+    Run YOLO detection (no tracking) for all non-person classes.
+    Returns a list of {box, class_id, label, conf} dicts.
+    Uses yolo.predict() so ByteTrack state is not polluted.
+    """
+    h, w = frame.shape[:2]
+    product_classes = list(range(1, 80))   # all COCO classes except person (0)
+
+    try:
+        res = tracker.yolo.predict(
+            frame,
+            classes=product_classes,
+            conf=conf_threshold,
+            verbose=False,
+        )
+    except Exception as exc:
+        logger.warning("Product detection error: %s", exc)
+        return []
+
+    if not res or res[0].boxes is None:
+        return []
+
+    boxes = res[0].boxes
+    xyxy   = boxes.xyxy.cpu().numpy()
+    cls_ids = boxes.cls.cpu().numpy().astype(int)
+    confs   = boxes.conf.cpu().numpy()
+
+    products: List[Dict[str, Any]] = []
+    for box, cls_id, conf in zip(xyxy, cls_ids, confs):
+        x1 = max(0, int(box[0]))
+        y1 = max(0, int(box[1]))
+        x2 = min(w, int(box[2]))
+        y2 = min(h, int(box[3]))
+        products.append({
+            "box":      [x1, y1, x2, y2],
+            "class_id": int(cls_id),
+            "label":    _COCO_NAMES.get(int(cls_id), f"class_{cls_id}"),
+            "conf":     round(float(conf), 2),
+        })
+
+    return products
 
 
 # ── Feature extractors ────────────────────────────────────────────────────────

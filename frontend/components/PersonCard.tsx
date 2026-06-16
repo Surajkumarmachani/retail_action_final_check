@@ -3,8 +3,43 @@
 import { useEffect, useRef, useState } from "react";
 import { Prediction, PersonMetrics } from "@/lib/types";
 
-const DECAY_MS  = 3000; // signals stay green for 3 s after MediaPipe last saw them
-const EMA_K     = 0.35; // smoothing factor — prevents jittery probability jumps
+interface NearbyProduct { label: string; conf: number; inHand: boolean; }
+import { type FaceResult, type ExpressionName } from "@/hooks/useFaceExpression";
+
+// ── Expression metadata ───────────────────────────────────────────────────────
+
+const EXPR_ICON: Record<ExpressionName, string> = {
+  happy:     "😊",
+  surprised: "😮",
+  neutral:   "😐",
+  sad:       "😟",
+  angry:     "😠",
+  disgusted: "🤢",
+  fearful:   "😰",
+};
+
+const EXPR_LABEL: Record<ExpressionName, string> = {
+  happy:     "Positive — likely engaged",
+  surprised: "Actively interested",
+  neutral:   "Neutral / evaluating",
+  sad:       "Hesitant",
+  angry:     "Frustrated",
+  disgusted: "Negative reaction",
+  fearful:   "Uncertain",
+};
+
+const EXPR_COLOR: Record<ExpressionName, { text: string; bar: string; bg: string; border: string }> = {
+  happy:     { text: "text-green-300",  bar: "bg-green-400",  bg: "bg-green-950/30",  border: "border-green-500/25" },
+  surprised: { text: "text-cyan-300",   bar: "bg-cyan-400",   bg: "bg-cyan-950/30",   border: "border-cyan-500/25" },
+  neutral:   { text: "text-gray-300",   bar: "bg-gray-500",   bg: "bg-white/[0.025]", border: "border-white/8" },
+  sad:       { text: "text-blue-300",   bar: "bg-blue-400",   bg: "bg-blue-950/20",   border: "border-blue-500/20" },
+  angry:     { text: "text-red-300",    bar: "bg-red-400",    bg: "bg-red-950/20",    border: "border-red-500/20" },
+  disgusted: { text: "text-orange-300", bar: "bg-orange-400", bg: "bg-orange-950/20", border: "border-orange-500/20" },
+  fearful:   { text: "text-purple-300", bar: "bg-purple-400", bg: "bg-purple-950/20", border: "border-purple-500/20" },
+};
+
+const DECAY_MS  = 1500; // signals stay green for 1.5 s after MediaPipe last saw them
+const EMA_K     = 0.65; // higher = faster response to probability changes
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 
@@ -16,6 +51,16 @@ function useSmoothProb(raw: number) {
     setVal(ref.current);
   }, [raw]);
   return val;
+}
+
+function useProbHistory(raw: number, maxPts = 24) {
+  const hist = useRef<number[]>([raw]);
+  const [snap, setSnap] = useState<number[]>([raw]);
+  useEffect(() => {
+    hist.current = [...hist.current.slice(-(maxPts - 1)), raw];
+    setSnap([...hist.current]);
+  }, [raw, maxPts]);
+  return snap;
 }
 
 function useDecay(m: PersonMetrics | undefined) {
@@ -41,6 +86,40 @@ function useDecay(m: PersonMetrics | undefined) {
     const ok = typeof current === "boolean" ? current : current > 0;
     return ok || now - (ts.current.get(key) ?? 0) < DECAY_MS;
   };
+}
+
+// ── Confidence sparkline ──────────────────────────────────────────────────────
+
+function SparkLine({ pts, isBuy, uid }: { pts: number[]; isBuy: boolean; uid: string }) {
+  if (pts.length < 2) return null;
+  const W = 116, H = 26;
+  const sy  = (v: number) => H - v * H;
+  const sx  = (i: number) => (i / (pts.length - 1)) * W;
+  const d   = pts.map((v, i) => `${i === 0 ? "M" : "L"}${sx(i).toFixed(1)},${sy(v).toFixed(1)}`).join(" ");
+  const col = isBuy ? "#22c55e" : "#3b82f6";
+  const gid = `spk-${uid}`;
+  const last = pts[pts.length - 1];
+  const prev = pts[pts.length - 2] ?? last;
+  const trend = last > prev ? "↑" : last < prev ? "↓" : "→";
+  const trendCol = last > prev ? "#22c55e" : last < prev ? "#f87171" : "#9ca3af";
+  return (
+    <div className="flex items-center gap-2">
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="overflow-visible flex-shrink-0">
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={col} stopOpacity="0.22" />
+            <stop offset="100%" stopColor={col} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={`${d} L${W},${H} L0,${H} Z`} fill={`url(#${gid})`} />
+        <path d={d} fill="none" stroke={col} strokeWidth="1.5" strokeLinejoin="round" />
+        <circle cx={sx(pts.length - 1)} cy={sy(last)} r="2.5" fill={col} />
+      </svg>
+      <span className="text-[11px] font-mono font-bold flex-shrink-0" style={{ color: trendCol }}>
+        {trend}
+      </span>
+    </div>
+  );
 }
 
 // ── Large animated probability ring ──────────────────────────────────────────
@@ -163,11 +242,22 @@ export function MiniCard({ p }: { p: Prediction }) {
 
 // ── Primary analysis card ─────────────────────────────────────────────────────
 
-export function PersonCard({ p, isPrimary = false }: { p: Prediction; isPrimary?: boolean }) {
+export function PersonCard({
+  p,
+  isPrimary = false,
+  expression = null,
+  nearbyProduct = null,
+}: {
+  p: Prediction;
+  isPrimary?: boolean;
+  expression?: FaceResult | null;
+  nearbyProduct?: NearbyProduct | null;
+}) {
   const isBuy  = p.verdict === "LIKELY BUY";
   const m      = p.metrics;
   const sig    = useDecay(m);
   const smooth = useSmoothProb(p.prob);
+  const hist   = useProbHistory(smooth);
 
   // Flash on meaningful probability change
   const prevP  = useRef(p.prob);
@@ -240,7 +330,66 @@ export function PersonCard({ p, isPrimary = false }: { p: Prediction; isPrimary?
           </div>
           <span className="text-[9px] font-mono text-gray-600 w-10 text-right">{p.windows}×5s</span>
         </div>
+
+        {/* Confidence trend sparkline */}
+        <div className="flex items-center justify-between rounded-xl bg-white/[0.025] border border-white/5 px-3 py-2 mt-2">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-gray-600">Confidence Trend</span>
+            <span className={`text-[12px] font-mono font-bold ${isBuy ? "text-green-400" : "text-blue-400"}`}>
+              {Math.round(smooth * 100)}%
+            </span>
+          </div>
+          <SparkLine pts={hist} isBuy={isBuy} uid={`${p.id}`} />
+        </div>
       </div>
+
+      {/* Live metric chips */}
+      {m && (
+        <div className="px-3 pb-3 grid grid-cols-3 gap-1.5">
+          {[
+            { label: "Lean", val: `${Math.abs(m.lean_angle).toFixed(1)}°` },
+            {
+              label: "Gaze",
+              val: `${Math.abs(m.head_yaw_proxy).toFixed(1)}°${m.head_yaw_proxy >= 0 ? "R" : "L"}`,
+            },
+            { label: "Hands", val: `${m.hands_detected}` },
+          ].map(({ label, val }) => (
+            <div key={label} className="rounded-lg bg-white/[0.03] border border-white/5 px-2 py-1.5 text-center">
+              <p className="text-[9px] text-gray-600 uppercase tracking-wide mb-0.5">{label}</p>
+              <p className="text-[12px] font-mono font-bold text-gray-200">{val}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Facial expression */}
+      {expression && (() => {
+        const ec = EXPR_COLOR[expression.dominant];
+        return (
+          <div className="px-3 pb-2">
+            <div className={`flex items-center gap-2.5 rounded-xl px-3 py-2 border transition-all duration-500 ${ec.bg} ${ec.border}`}>
+              <span className="text-xl leading-none flex-shrink-0">{EXPR_ICON[expression.dominant]}</span>
+              <div className="flex-1 min-w-0">
+                <p className={`text-[11px] font-bold leading-tight ${ec.text}`}>
+                  {EXPR_LABEL[expression.dominant]}
+                </p>
+                <div className="mt-1 h-1 rounded-full bg-gray-800 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${ec.bar}`}
+                    style={{ width: `${expression.confidence * 100}%` }}
+                  />
+                </div>
+              </div>
+              <div className="flex-shrink-0 text-right">
+                <p className="text-[8px] font-mono text-gray-600 uppercase tracking-wider">Facial</p>
+                <p className={`text-[11px] font-mono font-bold ${ec.text}`}>
+                  {Math.round(expression.confidence * 100)}%
+                </p>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Behavioral signals */}
       <div className="px-3 pb-3 space-y-1.5">
@@ -250,15 +399,19 @@ export function PersonCard({ p, isPrimary = false }: { p: Prediction; isPrimary?
 
         <BehaviorRow
           icon="👁️"
-          label="Looking at product"
+          label={nearbyProduct && lookingAt ? `Looking at: ${nearbyProduct.label}` : "Looking at product"}
           on={lookingAt}
           highlight={lookingAt}
         />
         <BehaviorRow
-          icon="🤲"
-          label="Hands near / on item"
+          icon={nearbyProduct?.inHand ? "📦" : "🤲"}
+          label={
+            nearbyProduct?.inHand
+              ? `Holding: ${nearbyProduct.label} (${Math.round(nearbyProduct.conf * 100)}%)`
+              : "Hands near / on item"
+          }
           on={atShelf}
-          highlight={atShelf && lookingAt}
+          highlight={atShelf && !!nearbyProduct}
         />
         <BehaviorRow
           icon="✨"
@@ -267,7 +420,11 @@ export function PersonCard({ p, isPrimary = false }: { p: Prediction; isPrimary?
         />
         <BehaviorRow
           icon="🔍"
-          label="Actively examining"
+          label={
+            examining && nearbyProduct
+              ? `Examining: ${nearbyProduct.label}`
+              : "Actively examining"
+          }
           on={examining}
           highlight={examining}
         />

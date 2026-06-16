@@ -29,9 +29,17 @@ export interface Prediction {
   metrics?:  PersonMetrics;
 }
 
+export interface ProductDetection {
+  box:      [number, number, number, number];
+  class_id: number;
+  label:    string;
+  conf:     number;
+}
+
 export interface ServerMessage {
-  type:    "predictions" | "auth_ok" | "auth_error";
-  data?:   Prediction[];
-  uid?:    string;
-  detail?: string;
+  type:      "predictions" | "auth_ok" | "auth_error";
+  data?:     Prediction[];
+  products?: ProductDetection[];
+  uid?:      string;
+  detail?:   string;
 }

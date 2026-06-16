@@ -66,9 +66,9 @@ app.add_middleware(
 # ── Globals (initialised at startup) ─────────────────────────────────────────
 
 ARTIFACTS_DIR = os.environ.get("ARTIFACTS_DIR", "./artifacts")
-MODEL_PATH    = os.path.join(ARTIFACTS_DIR, "transformer_behaviour_best.joblib")
-SCALER_PATH   = os.path.join(ARTIFACTS_DIR, "scaler.joblib")
-YOLO_PATH     = os.path.join(ARTIFACTS_DIR, "yolov8s.pt")
+MODEL_PATH = os.path.join(ARTIFACTS_DIR, "best_combine_model_purchase_prediction.joblib")
+YOLO_PATH  = os.path.join(ARTIFACTS_DIR, "yolov8m.pt")
+# Scaler is bundled inside MODEL_PATH — no separate file needed
 
 predictor: PurchasePredictor | None = None
 executor:  ThreadPoolExecutor | None = None
@@ -78,7 +78,7 @@ executor:  ThreadPoolExecutor | None = None
 async def startup() -> None:
     global predictor, executor
     init_firebase()
-    predictor = PurchasePredictor(MODEL_PATH, SCALER_PATH)
+    predictor = PurchasePredictor(MODEL_PATH)
     executor  = ThreadPoolExecutor(
         max_workers=int(os.environ.get("CV_WORKERS", "2")),
         thread_name_prefix="cv-worker",
@@ -144,7 +144,7 @@ async def ws_predict(ws: WebSocket) -> None:
                 continue
 
             # ── Offload blocking CV to thread pool ─────────────────────────
-            observations = await loop.run_in_executor(
+            observations, products = await loop.run_in_executor(
                 executor, process_frame, frame, tracker
             )
 
@@ -198,8 +198,9 @@ async def ws_predict(ws: WebSocket) -> None:
 
             # ── Stream predictions back to the browser ──────────────────────
             await ws.send_text(json.dumps({
-                "type": "predictions",
-                "data": response_items,
+                "type":     "predictions",
+                "data":     response_items,
+                "products": products,
             }))
 
     except WebSocketDisconnect:

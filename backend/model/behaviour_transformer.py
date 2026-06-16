@@ -1,5 +1,5 @@
 # model/behaviour_transformer.py
-# Exact architecture that produced transformer_behaviour_best.joblib.
+# Exact architecture that produced best_combine_model_purchase_prediction.joblib.
 # DO NOT change any dimension – the saved state_dict must match exactly.
 
 import math
@@ -42,13 +42,13 @@ class BehaviourTransformer(nn.Module):
 
     Loading from joblib state_dict (NOT torch.save):
         model = BehaviourTransformer(...)
-        model.load_state_dict(joblib.load("transformer_behaviour_best.joblib"))
+        model.load_state_dict(joblib.load("best_combine_model_purchase_prediction.joblib"))
         model.eval()
     """
 
     def __init__(
         self,
-        n_feats: int   = 41,
+        n_feats: int   = 42,
         max_seq: int   = 24,
         d_model: int   = 128,
         n_heads: int   = 4,

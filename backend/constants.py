@@ -1,6 +1,6 @@
 # constants.py  –  single source of truth for all hyperparameters + feature layout
 
-# ── 41-feature column order (MUST match training) ─────────────────────────────
+# ── 42-feature column order (MUST match training) ─────────────────────────────
 FEATURE_COLS: list[str] = [
     # Walk stats (5)
     "dwell_sec", "mean_speed", "max_speed", "direction_changes", "stop_frac",
@@ -15,17 +15,17 @@ FEATURE_COLS: list[str] = [
     "repeated_view_rate",
     # Hands (3)
     "hands_detected", "hand_open", "hand_pinch",
-    # Emotion (7) – zeroed when DeepFace is disabled; vector stays length-41
+    # Emotion (7) – zeroed when DeepFace is disabled; vector stays length-42
     "emotion_detected", "emo_happy", "emo_interested", "emo_neutral",
     "emo_disinterested", "emo_negative", "emo_confused",
-    # Social (3)
-    "group_size", "near_others", "avg_group_dist",
+    # Social (4) – near_objects added in combined model
+    "group_size", "near_others", "avg_group_dist", "near_objects",
 ]
 
-assert len(FEATURE_COLS) == 41, "Feature column count must be exactly 41"
+assert len(FEATURE_COLS) == 42, "Feature column count must be exactly 42"
 
 # ── BehaviourTransformer architecture ─────────────────────────────────────────
-N_FEATS:  int   = 41
+N_FEATS:  int   = 42
 MAX_SEQ:  int   = 24
 D_MODEL:  int   = 128
 N_HEADS:  int   = 4
@@ -33,8 +33,8 @@ N_LAYERS: int   = 4
 D_FF:     int   = 256
 DROPOUT:  float = 0.15
 
-# ── Inference thresholds ───────────────────────────────────────────────────────
-PURCHASE_THRESHOLD: float = 0.725   # Youden's J optimum from training
+# ── Inference thresholds (read from model bundle at runtime; this is the fallback) ──
+PURCHASE_THRESHOLD: float = 0.3244  # Youden's J from combined model training
 
 # ── CV pipeline ───────────────────────────────────────────────────────────────
 SAMPLE_EVERY: int   = 3          # run MediaPipe / DeepFace every Nth frame

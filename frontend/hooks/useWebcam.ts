@@ -4,6 +4,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+// Frames are sent at this fraction of native resolution.
+// Box coords from the server are in scaled space — multiply by 1/FRAME_SEND_SCALE to display.
+export const FRAME_SEND_SCALE = 0.5;
+
 export function useWebcam() {
   const videoRef      = useRef<HTMLVideoElement>(null);
   const captureCanvas = useRef<HTMLCanvasElement>(null);
@@ -51,20 +55,21 @@ export function useWebcam() {
     };
   }, []);
 
-  // Returns a Base64 JPEG string (no data: prefix) or null if not ready.
+  // Send frames at 50% linear resolution — 4× smaller payload, ~50% faster backend.
+  // Box coordinates returned by the server are in this scaled space; callers must
+  // multiply by 1/FRAME_SEND_SCALE to convert back to display (video) coordinates.
   const captureFrame = useCallback((): string | null => {
     const video  = videoRef.current;
     const canvas = captureCanvas.current;
     if (!video || !canvas || video.readyState < 2) return null;
 
-    canvas.width  = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width  = Math.round(video.videoWidth  * FRAME_SEND_SCALE);
+    canvas.height = Math.round(video.videoHeight * FRAME_SEND_SCALE);
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
 
-    // Draw without mirroring — server receives un-flipped coordinates.
-    ctx.drawImage(video, 0, 0);
-    return canvas.toDataURL("image/jpeg", 0.6).split(",")[1];
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.45).split(",")[1];
   }, []);
 
   return { videoRef, captureCanvas, ready, error, captureFrame };
