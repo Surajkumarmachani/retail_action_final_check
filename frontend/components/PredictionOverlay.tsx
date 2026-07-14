@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Prediction, ProductDetection } from "@/lib/types";
+import { Prediction, ProductDetection, Keypoint } from "@/lib/types";
 
 interface TrailPt { x: number; y: number; t: number; }
 interface Props {
@@ -13,6 +13,29 @@ interface Props {
 
 type Box = [number, number, number, number];
 interface BoxState { from: Box; to: Box; startT: number; }
+interface KpState  { from: Keypoint[]; to: Keypoint[]; startT: number; }
+
+// BAM band → colour
+const BAND_COL: Record<string, string> = {
+  HOT:  "#ef4444",   // red
+  WARM: "#f59e0b",   // amber
+  COLD: "#3b82f6",   // blue
+};
+
+// This overlay draws everything from the backend payload (like yolo_demo.py):
+// the green COCO-17 pose skeleton (from server keypoints), BAM person boxes/labels/BAS bars,
+// trails, and cyan product boxes with labels.
+
+// COCO-17 skeleton edges (matches the backend YOLOv8-pose keypoint order)
+const COCO_EDGES: [number, number][] = [
+  [0,1],[0,2],[1,3],[2,4],          // head: nose-eyes-ears
+  [0,5],[0,6],                      // nose → shoulders
+  [5,7],[7,9],[6,8],[8,10],         // arms
+  [5,6],[5,11],[6,12],[11,12],      // torso
+  [11,13],[13,15],[12,14],[14,16],  // legs
+];
+
+const LERP_MS = 120;
 
 export function PredictionOverlay({ predictions, products, frameWidth, frameHeight }: Props) {
   const canvasRef      = useRef<HTMLCanvasElement>(null);
@@ -21,6 +44,7 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
   const prodsRef       = useRef<ProductDetection[]>([]);
   const trailsRef      = useRef<Map<number, TrailPt[]>>(new Map());
   const boxStates      = useRef<Map<number, BoxState>>(new Map());
+  const kpStates       = useRef<Map<number, KpState>>(new Map());    // keypoint interpolation
   const prodBoxStates  = useRef<Map<string, BoxState>>(new Map());   // keyed by label
   const phaseRef       = useRef(0);
   const sizeRef        = useRef({ w: frameWidth, h: frameHeight });
@@ -47,7 +71,7 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
     for (const label of pbs.keys()) if (!activeLabels.has(label)) pbs.delete(label);
   }, [products]);
 
-  // Update predictions ref + trails + box interpolation states
+  // Update predictions ref + trails + box/keypoint interpolation states
   useEffect(() => {
     predsRef.current = predictions;
     const now = Date.now();
@@ -64,18 +88,35 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
       trail.push({ x: mx, y: rawCy, t: now });
       trails.set(p.id, trail.filter(pt => now - pt.t < 2500).slice(-24));
 
+      // Box interpolation
       const prev = boxes.get(p.id);
       if (prev) {
-        // Snap "from" to wherever the lerp was, start a new lerp to new target
-        const elapsed = Math.min(1, (now - prev.startT) / 120);
+        const elapsed = Math.min(1, (now - prev.startT) / LERP_MS);
         const lerped: Box = prev.from.map((v, i) => v + (prev.to[i] - v) * elapsed) as Box;
         boxes.set(p.id, { from: lerped, to: p.box, startT: now });
       } else {
         boxes.set(p.id, { from: p.box, to: p.box, startT: now });
       }
+
+      // Keypoint interpolation — glides the skeleton between backend frames
+      if (p.keypoints && p.keypoints.length) {
+        const prevKp = kpStates.current.get(p.id);
+        if (prevKp && prevKp.to.length === p.keypoints.length) {
+          const el = Math.min(1, (now - prevKp.startT) / LERP_MS);
+          const lerpedKp: Keypoint[] = p.keypoints.map((kp, i) => {
+            const f = prevKp.from[i] ?? kp;
+            const t = prevKp.to[i]   ?? kp;
+            return [f[0] + (t[0] - f[0]) * el, f[1] + (t[1] - f[1]) * el, kp[2]] as Keypoint;
+          });
+          kpStates.current.set(p.id, { from: lerpedKp, to: p.keypoints, startT: now });
+        } else {
+          kpStates.current.set(p.id, { from: p.keypoints, to: p.keypoints, startT: now });
+        }
+      }
     }
-    for (const id of trails.keys()) if (!activeIds.has(id)) trails.delete(id);
-    for (const id of boxes.keys())  if (!activeIds.has(id)) boxes.delete(id);
+    for (const id of trails.keys())          if (!activeIds.has(id)) trails.delete(id);
+    for (const id of boxes.keys())           if (!activeIds.has(id)) boxes.delete(id);
+    for (const id of kpStates.current.keys()) if (!activeIds.has(id)) kpStates.current.delete(id);
   }, [predictions]);
 
   useEffect(() => {
@@ -114,7 +155,7 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
 
       // ── Product boxes (drawn first so persons render on top) ────────────
       for (const prod of prods) {
-        if (prod.conf < 0.75) continue;   // skip low-confidence detections
+        if (prod.conf < 0.35) continue;   // match backend detection threshold
 
         // Lerp product box for smooth movement (150ms window, keyed by label)
         const pstate = prodBoxStates.current.get(prod.label);
@@ -132,16 +173,16 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
         const cy = (y1 + y2) / 2;
         const cs = Math.min(bw, bh, 22);
 
-        // Pulsing amber fill
+        // Pulsing cyan fill
         const pa = 0.06 + Math.sin(phase * 3.5) * 0.025;
-        ctx.fillStyle = `rgba(245,158,11,${pa})`;
+        ctx.fillStyle = `rgba(6,182,212,${pa})`;
         ctx.fillRect(x1, y1, bw, bh);
 
-        // Dashed amber border with glow
+        // Dashed cyan border with glow
         ctx.save();
-        ctx.shadowColor = "rgba(245,158,11,0.5)";
+        ctx.shadowColor = "rgba(6,182,212,0.5)";
         ctx.shadowBlur  = 16;
-        ctx.strokeStyle = "rgba(245,158,11,0.8)";
+        ctx.strokeStyle = "rgba(6,182,212,0.85)";
         ctx.lineWidth   = 1.5;
         ctx.setLineDash([6, 4]);
         ctx.strokeRect(x1, y1, bw, bh);
@@ -151,10 +192,10 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
         // Animated corner brackets
         const ca = 0.7 + Math.sin(phase * 2.2) * 0.3;
         ctx.save();
-        ctx.strokeStyle = "#fbbf24";
+        ctx.strokeStyle = "#22d3ee";
         ctx.lineWidth   = 2.5;
         ctx.lineCap     = "round";
-        ctx.shadowColor = "#f59e0b";
+        ctx.shadowColor = "#06b6d4";
         ctx.shadowBlur  = 10;
         ctx.globalAlpha = ca;
         for (const [bx, by, dx, dy] of [
@@ -173,57 +214,46 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
         ctx.save();
         ctx.beginPath();
         ctx.arc(cx, cy, 3.5, 0, Math.PI * 2);
-        ctx.fillStyle   = "rgba(251,191,36,0.9)";
-        ctx.shadowColor = "#f59e0b";
+        ctx.fillStyle   = "rgba(103,232,249,0.9)";
+        ctx.shadowColor = "#06b6d4";
         ctx.shadowBlur  = 8;
         ctx.fill();
         ctx.restore();
 
-        // Vertical scan line sweeping through box
-        const scanY = y1 + ((phase * 40) % bh);
-        ctx.save();
-        ctx.globalAlpha = 0.22;
-        const sg = ctx.createLinearGradient(x1, scanY - 8, x1, scanY + 8);
-        sg.addColorStop(0,   "rgba(245,158,11,0)");
-        sg.addColorStop(0.5, "rgba(245,158,11,1)");
-        sg.addColorStop(1,   "rgba(245,158,11,0)");
-        ctx.fillStyle = sg;
-        ctx.fillRect(x1, scanY - 8, bw, 16);
-        ctx.restore();
-
-        // Label chip
-        const label = `${prod.label}  ${Math.round(prod.conf * 100)}%`;
+        // Label chip — yolo_demo format, e.g. "cup 0.90"
+        const label = `${prod.label} ${prod.conf.toFixed(2)}`;
         ctx.font = "700 11px ui-monospace, monospace";
         const tw = ctx.measureText(label).width;
         const lx = x1;
         const ly = y1 > 30 ? y1 - 28 : y2 + 4;
 
         ctx.save();
-        ctx.shadowColor = "rgba(245,158,11,0.6)";
+        ctx.shadowColor = "rgba(6,182,212,0.6)";
         ctx.shadowBlur  = 8;
         roundRect(ctx, lx, ly, tw + 16, 22, 4);
-        ctx.fillStyle   = "rgba(92,40,5,0.95)";
+        ctx.fillStyle   = "rgba(6,30,40,0.95)";
         ctx.fill();
-        ctx.strokeStyle = "rgba(245,158,11,0.6)";
+        ctx.strokeStyle = "rgba(6,182,212,0.6)";
         ctx.lineWidth   = 1;
         ctx.stroke();
         ctx.restore();
 
-        ctx.fillStyle = "#fcd34d";
+        ctx.fillStyle = "#67e8f9";
         ctx.font      = "700 11px ui-monospace, monospace";
         ctx.fillText(label, lx + 8, ly + 15);
       }
 
-      // ── Person boxes ────────────────────────────────────────────────────
+      // ── Person boxes + skeleton ─────────────────────────────────────────
       for (const p of preds) {
-        const isBuy = p.verdict === "LIKELY BUY";
-        const col   = isBuy ? "#22c55e" : "#3b82f6";
+        const band = p.band ?? "COLD";
+        const col  = BAND_COL[band] ?? BAND_COL.COLD;
+        const isHot = band === "HOT";
 
-        // Lerp box coordinates for smooth motion (120ms interpolation window)
+        // Lerp box coordinates for smooth motion
         const state = boxes.get(p.id);
         let rawBox = p.box;
         if (state) {
-          const t = Math.min(1, (now - state.startT) / 120);
+          const t = Math.min(1, (now - state.startT) / LERP_MS);
           rawBox = state.from.map((v, i) => v + (state.to[i] - v) * t) as typeof p.box;
         }
         const [_x1, _y1, _x2, _y2] = rawBox;
@@ -240,8 +270,76 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
         const cs = Math.min(bw, bh, 24);
 
         // Subtle fill
-        ctx.fillStyle = isBuy ? "rgba(34,197,94,0.05)" : "rgba(59,130,246,0.03)";
+        ctx.fillStyle = isHot ? "rgba(239,68,68,0.05)" : band === "WARM" ? "rgba(245,158,11,0.04)" : "rgba(59,130,246,0.03)";
         ctx.fillRect(x1, y1, bw, bh);
+
+        // ── Green COCO-17 skeleton (interpolated server keypoints, normalised → mirrored px) ──
+        const kpSt = kpStates.current.get(p.id);
+        const kps: Keypoint[] | undefined = kpSt
+          ? kpSt.from.map((f, i) => {
+              const t = kpSt.to[i] ?? f;
+              const el = Math.min(1, (now - kpSt.startT) / LERP_MS);
+              return [f[0] + (t[0] - f[0]) * el, f[1] + (t[1] - f[1]) * el, t[2]] as Keypoint;
+            })
+          : p.keypoints;
+        if (kps && kps.length >= 17) {
+          const KX = (kp: Keypoint) => w - kp[0] * w;   // mirror to match CSS scaleX(-1)
+          const KY = (kp: Keypoint) => kp[1] * h;
+          // bones
+          ctx.save();
+          ctx.strokeStyle = "#22c55e";
+          ctx.lineWidth   = 2.5;
+          ctx.lineCap     = "round";
+          ctx.shadowColor = "#22c55e";
+          ctx.shadowBlur  = 4;
+          for (const [a, b] of COCO_EDGES) {
+            const ka = kps[a], kb = kps[b];
+            if (!ka || !kb || ka[2] < 0.3 || kb[2] < 0.3) continue;
+            ctx.beginPath();
+            ctx.moveTo(KX(ka), KY(ka));
+            ctx.lineTo(KX(kb), KY(kb));
+            ctx.stroke();
+          }
+          // joints
+          ctx.fillStyle = "#86efac";
+          for (const kp of kps) {
+            if (kp[2] < 0.3) continue;
+            ctx.beginPath();
+            ctx.arc(KX(kp), KY(kp), 3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.restore();
+
+          // ── Gaze rays: eyes → nearest product (amber, like AcuPosture) ──
+          const le = kps[1], re = kps[2];
+          if (prods.length && (le?.[2] >= 0.3 || re?.[2] >= 0.3)) {
+            let tx = 0, ty = 0, bestD = Infinity;
+            for (const prod of prods) {
+              if (prod.conf < 0.35) continue;
+              const pcx = w - (prod.box[0] + prod.box[2]) / 2;
+              const pcy = (prod.box[1] + prod.box[3]) / 2;
+              const d = Math.hypot(pcx - cx, pcy - cy);
+              if (d < bestD) { bestD = d; tx = pcx; ty = pcy; }
+            }
+            if (bestD < Infinity && bestD < Math.max(bw, bh) * 2.2) {
+              ctx.save();
+              ctx.strokeStyle = "rgba(245,158,11,0.75)";
+              ctx.lineWidth = 1.5;
+              ctx.setLineDash([5, 4]);
+              ctx.shadowColor = "#f59e0b";
+              ctx.shadowBlur  = 4;
+              for (const eye of [le, re]) {
+                if (!eye || eye[2] < 0.3) continue;
+                ctx.beginPath();
+                ctx.moveTo(KX(eye), KY(eye));
+                ctx.lineTo(tx, ty);
+                ctx.stroke();
+              }
+              ctx.setLineDash([]);
+              ctx.restore();
+            }
+          }
+        }
 
         // Trail
         const trail = trails.get(p.id) ?? [];
@@ -249,26 +347,22 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
           for (let i = 1; i < trail.length; i++) {
             const a = (i / trail.length) * 0.5;
             ctx.beginPath();
-            ctx.strokeStyle = isBuy ? `rgba(34,197,94,${a})` : `rgba(59,130,246,${a})`;
+            ctx.strokeStyle = `${col}${Math.round(a * 255).toString(16).padStart(2, "0")}`;
             ctx.lineWidth = 2;
             ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
             ctx.lineTo(trail[i].x, trail[i].y);
             ctx.stroke();
           }
-          ctx.beginPath();
-          ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-          ctx.fillStyle = col;
-          ctx.fill();
         }
 
-        // Pulse rings (BUY only)
-        if (isBuy) {
+        // Pulse rings (HOT only)
+        if (isHot) {
           for (let ring = 0; ring < 3; ring++) {
             const t = ((phase + ring * 2.1) % 6.28) / 6.28;
             const r = Math.min(bw, bh) * 0.38 * (0.4 + t);
             ctx.beginPath();
             ctx.arc(cx, cy, r, 0, Math.PI * 2);
-            ctx.strokeStyle = `rgba(34,197,94,${(1 - t) * 0.28})`;
+            ctx.strokeStyle = `rgba(239,68,68,${(1 - t) * 0.28})`;
             ctx.lineWidth = 1.5;
             ctx.stroke();
           }
@@ -277,9 +371,9 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
         // Glowing bounding box
         ctx.save();
         ctx.shadowColor = col;
-        ctx.shadowBlur  = isBuy ? 14 : 6;
+        ctx.shadowBlur  = isHot ? 14 : 6;
         ctx.strokeStyle = col;
-        ctx.lineWidth   = isBuy ? 2 : 1.5;
+        ctx.lineWidth   = isHot ? 2 : 1.5;
         ctx.strokeRect(x1, y1, bw, bh);
         ctx.restore();
 
@@ -304,9 +398,9 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
         }
         ctx.restore();
 
-        // Label (text is NOT mirrored — canvas itself is un-mirrored)
-        const pct   = `${(p.prob * 100).toFixed(0)}%`;
-        const label = `#${p.id}  ${pct}  ${p.verdict}`;
+        // Label — #id  BAS  BAND
+        const bas   = Math.round(p.bas ?? (p.prob * 100));
+        const label = `#${p.id}  ${bas}  ${band}`;
         ctx.font = "bold 11px ui-monospace, monospace";
         const tw = ctx.measureText(label).width;
         const lx = x1;
@@ -316,7 +410,7 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
         ctx.shadowColor = col;
         ctx.shadowBlur  = 8;
         roundRect(ctx, lx, ly, tw + 14, 22, 4);
-        ctx.fillStyle = isBuy ? "rgba(20,83,45,0.95)" : "rgba(30,58,138,0.95)";
+        ctx.fillStyle = isHot ? "rgba(80,10,10,0.95)" : band === "WARM" ? "rgba(80,50,5,0.95)" : "rgba(20,40,90,0.95)";
         ctx.fill();
         ctx.restore();
 
@@ -324,14 +418,14 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
         ctx.font      = "bold 11px ui-monospace, monospace";
         ctx.fillText(label, lx + 7, ly + 14);
 
-        // Probability bar at box bottom
+        // BAS bar at box bottom
         ctx.fillStyle = "rgba(0,0,0,0.5)";
         ctx.fillRect(x1, y2 - 3, bw, 3);
         ctx.save();
         ctx.shadowColor = col;
         ctx.shadowBlur  = 6;
         ctx.fillStyle   = col;
-        ctx.fillRect(x1, y2 - 3, bw * p.prob, 3);
+        ctx.fillRect(x1, y2 - 3, bw * Math.min(1, (p.bas ?? p.prob * 100) / 100), 3);
         ctx.restore();
       }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup } from "firebase/auth";
+import { GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, sendPasswordResetEmail } from "firebase/auth";
 import { useState } from "react";
 import { auth } from "@/lib/firebase";
 
@@ -9,10 +9,11 @@ export function AuthGate() {
   const [password, setPassword] = useState("");
   const [mode,     setMode]     = useState<"login"|"signup">("login");
   const [error,    setError]    = useState<string|null>(null);
+  const [notice,   setNotice]   = useState<string|null>(null);
   const [loading,  setLoading]  = useState(false);
 
   const submit = async () => {
-    setError(null); setLoading(true);
+    setError(null); setNotice(null); setLoading(true);
     try {
       if (mode === "login") await signInWithEmailAndPassword(auth, email, password);
       else await createUserWithEmailAndPassword(auth, email, password);
@@ -21,9 +22,20 @@ export function AuthGate() {
   };
 
   const googleSignIn = async () => {
-    setError(null); setLoading(true);
+    setError(null); setNotice(null); setLoading(true);
     try { await signInWithPopup(auth, new GoogleAuthProvider()); }
     catch (e: unknown) { setError((e as Error).message); }
+    finally { setLoading(false); }
+  };
+
+  const resetPassword = async () => {
+    setError(null); setNotice(null);
+    if (!email.trim()) { setError("Enter your email address first, then click “Forgot password?”"); return; }
+    setLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, email.trim());
+      setNotice(`Password reset link sent to ${email.trim()}. Check your inbox (and spam).`);
+    } catch (e: unknown) { setError((e as Error).message); }
     finally { setLoading(false); }
   };
 
@@ -50,7 +62,7 @@ export function AuthGate() {
           {/* Tab toggle */}
           <div className="mb-5 flex rounded-lg bg-gray-900 p-1">
             {(["login","signup"] as const).map(m => (
-              <button key={m} onClick={() => setMode(m)}
+              <button key={m} onClick={() => { setMode(m); setError(null); setNotice(null); }}
                 className={`flex-1 rounded-md py-1.5 text-xs font-semibold tracking-wide transition-all ${
                   mode === m ? "bg-gray-700 text-white shadow-sm" : "text-gray-500 hover:text-gray-300"
                 }`}>
@@ -68,8 +80,20 @@ export function AuthGate() {
               className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm text-white placeholder-gray-600 outline-none ring-1 ring-white/10 focus:ring-green-500/50 transition-shadow" />
           </div>
 
+          {mode === "login" && (
+            <div className="mt-2 text-right">
+              <button onClick={resetPassword} disabled={loading}
+                className="text-[11px] font-medium text-gray-500 hover:text-green-400 transition-colors disabled:opacity-50">
+                Forgot password?
+              </button>
+            </div>
+          )}
+
           {error && (
             <div className="mt-3 rounded-lg bg-red-950/50 border border-red-500/20 px-3 py-2 text-xs text-red-400">{error}</div>
+          )}
+          {notice && (
+            <div className="mt-3 rounded-lg bg-green-950/50 border border-green-500/20 px-3 py-2 text-xs text-green-400">{notice}</div>
           )}
 
           <button onClick={submit} disabled={loading}

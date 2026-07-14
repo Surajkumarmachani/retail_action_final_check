@@ -7,7 +7,7 @@ python-multipart>=0.0.9
 # CV pipeline
 opencv-python-headless>=4.9.0
 ultralytics>=8.1.0          # YOLOv8 + ByteTrack
-mediapipe>=0.10.11
+mediapipe==0.10.14
 # deepface>=0.0.89          # optional – uncomment to enable emotion analysis
 
 # ML / inference

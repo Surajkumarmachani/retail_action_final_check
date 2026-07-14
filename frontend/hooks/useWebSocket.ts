@@ -8,18 +8,19 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { auth } from "@/lib/firebase";
-import { Prediction, ProductDetection, ServerMessage } from "@/lib/types";
+import { Prediction, ProductDetection, BAMEvent, ServerMessage } from "@/lib/types";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL!;
 
 export function usePredictorSocket(opts: {
   onPredictions: (preds: Prediction[]) => void;
   onProducts?:   (prods: ProductDetection[]) => void;
+  onEvents?:     (evs: BAMEvent[]) => void;
   captureFrame:  () => string | null;
   webcamReady:   boolean;
   fps?:          number;
 }) {
-  const { onPredictions, onProducts, captureFrame, webcamReady } = opts;
+  const { onPredictions, onProducts, onEvents, captureFrame, webcamReady } = opts;
 
   const wsRef       = useRef<WebSocket | null>(null);
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -29,9 +30,11 @@ export function usePredictorSocket(opts: {
   const captureRef  = useRef(captureFrame);
   const onPredsRef  = useRef(onPredictions);
   const onProdsRef  = useRef(onProducts);
+  const onEventsRef = useRef(onEvents);
   useEffect(() => { captureRef.current  = captureFrame;  }, [captureFrame]);
   useEffect(() => { onPredsRef.current  = onPredictions; }, [onPredictions]);
   useEffect(() => { onProdsRef.current  = onProducts;    }, [onProducts]);
+  useEffect(() => { onEventsRef.current = onEvents;      }, [onEvents]);
 
   const [connected, setConnected] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -81,6 +84,7 @@ export function usePredictorSocket(opts: {
       } else if (msg.type === "predictions") {
         onPredsRef.current(msg.data ?? []);
         if (msg.products) onProdsRef.current?.(msg.products);
+        if (msg.events && msg.events.length) onEventsRef.current?.(msg.events);
         // Response received — immediately fire next frame
         inFlightRef.current = false;
         sendFrame();

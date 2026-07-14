@@ -3,31 +3,31 @@
 import { useCallback, useEffect, useRef, useState, ReactNode } from "react";
 import { signOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
-import { Prediction, ProductDetection } from "@/lib/types";
+import { Prediction, ProductDetection, BAMEvent, BAMBand } from "@/lib/types";
 import { useWebcam, FRAME_SEND_SCALE } from "@/hooks/useWebcam";
 import { usePredictorSocket } from "@/hooks/useWebSocket";
-import { useFaceExpression, type FaceResult } from "@/hooks/useFaceExpression";
+import { useHolisticLandmarks } from "@/hooks/useHolisticLandmarks";
 import { PredictionOverlay } from "./PredictionOverlay";
 import { PersonCard, MiniCard } from "./PersonCard";
+import { PostureTiltPanel } from "./PostureTiltPanel";
 
 const STREAM_FPS = 15;
 const STALE_MS   = 600;   // tighter — removes stale boxes faster
 
 // ── Intel feed ────────────────────────────────────────────────────────────────
 
-type EvType = "ENTRY" | "EXIT" | "BUY" | "BROWSE" | "OBJ" | "DWELL";
-interface IntelEvent { id: string; ts: number; type: EvType; body: string; }
+type EvType = "ENTRY" | "EXIT" | "OBJ" | "BAMP" | "BAMN";
+interface IntelEvent { id: string; ts: number; type: EvType; body: string; tag?: string; }
 
 const EV_STYLE: Record<EvType, string> = {
-  ENTRY:  "text-cyan-400  border-cyan-500/40",
-  EXIT:   "text-gray-500  border-gray-600/30",
-  BUY:    "text-green-400 border-green-500/40",
-  BROWSE: "text-blue-400  border-blue-500/30",
-  OBJ:    "text-amber-400 border-amber-500/40",
-  DWELL:  "text-purple-400 border-purple-500/30",
+  ENTRY:  "text-cyan-400   border-cyan-500/40",
+  EXIT:   "text-gray-500   border-gray-600/30",
+  OBJ:    "text-amber-400  border-amber-500/40",
+  BAMP:   "text-green-400  border-green-500/40",   // positive BAM event
+  BAMN:   "text-red-400    border-red-500/40",      // negative BAM event
 };
 const EV_TAG: Record<EvType, string> = {
-  ENTRY: "ENTR", EXIT: "EXIT", BUY: "BUY!", BROWSE: "BRWS", OBJ: "OBJ·", DWELL: "DWLL",
+  ENTRY: "ENTR", EXIT: "EXIT", OBJ: "OBJ·", BAMP: "E", BAMN: "N",
 };
 
 function IntelFeed({ events }: { events: IntelEvent[] }) {
@@ -48,7 +48,7 @@ function IntelFeed({ events }: { events: IntelEvent[] }) {
         <div key={ev.id} className="flex items-center gap-2 py-[3px] border-b border-white/[0.03]">
           <span className="flex-shrink-0 font-mono text-[8.5px] text-gray-600 w-[50px]">{fmt(ev.ts)}</span>
           <span className={`flex-shrink-0 font-mono text-[7.5px] font-bold border rounded px-1 py-px leading-tight ${EV_STYLE[ev.type]}`}>
-            {EV_TAG[ev.type]}
+            {ev.tag ?? EV_TAG[ev.type]}
           </span>
           <span className="font-mono text-[9px] text-gray-400 leading-tight truncate">{ev.body}</span>
         </div>
@@ -88,25 +88,42 @@ function Panel({
 
 // ── Subject registry row ──────────────────────────────────────────────────────
 
+const BAND_TEXT: Record<BAMBand, string> = {
+  HOT:  "text-red-400",
+  WARM: "text-amber-400",
+  COLD: "text-blue-400",
+};
+const BAND_BAR: Record<BAMBand, string> = {
+  HOT:  "bg-red-500",
+  WARM: "bg-amber-500",
+  COLD: "bg-blue-500",
+};
+const BAND_DOT: Record<BAMBand, string> = {
+  HOT:  "bg-red-400 animate-pulse",
+  WARM: "bg-amber-400",
+  COLD: "bg-blue-400/60",
+};
+
 function SubjectRow({ p }: { p: Prediction }) {
-  const isBuy = p.verdict === "LIKELY BUY";
+  const band = (p.band ?? "COLD") as BAMBand;
+  const bas  = p.bas ?? Math.round(p.prob * 100);
   const dwell = p.dwell_sec ?? 0;
   const m = Math.floor(dwell / 60), s = Math.floor(dwell % 60);
   return (
-    <div className={`flex items-center gap-2 px-3 py-1.5 border-b border-white/[0.04] ${isBuy ? "bg-green-950/20" : ""}`}>
-      <div className={`flex-shrink-0 h-1.5 w-1.5 rounded-full ${isBuy ? "bg-green-400 animate-pulse" : "bg-blue-400/60"}`} />
+    <div className={`flex items-center gap-2 px-3 py-1.5 border-b border-white/[0.04] ${band === "HOT" ? "bg-red-950/20" : band === "WARM" ? "bg-amber-950/10" : ""}`}>
+      <div className={`flex-shrink-0 h-1.5 w-1.5 rounded-full ${BAND_DOT[band]}`} />
       <span className="flex-shrink-0 w-7 font-mono text-[10px] font-bold text-gray-300">#{p.id}</span>
       <div className="flex-1 h-[3px] rounded-full bg-gray-800/80 overflow-hidden">
         <div
-          className={`h-full rounded-full transition-all duration-500 ${isBuy ? "bg-green-500" : "bg-blue-500"}`}
-          style={{ width: `${p.prob * 100}%` }}
+          className={`h-full rounded-full transition-all duration-500 ${BAND_BAR[band]}`}
+          style={{ width: `${Math.min(100, bas)}%` }}
         />
       </div>
-      <span className={`flex-shrink-0 w-8 text-right font-mono text-[10px] font-bold ${isBuy ? "text-green-400" : "text-blue-400"}`}>
-        {Math.round(p.prob * 100)}%
+      <span className={`flex-shrink-0 w-8 text-right font-mono text-[10px] font-bold ${BAND_TEXT[band]}`}>
+        {Math.round(bas)}
       </span>
-      <span className={`flex-shrink-0 w-[68px] text-right font-mono text-[7.5px] font-bold ${isBuy ? "text-green-600" : "text-blue-600"}`}>
-        {isBuy ? "LIKELY BUY" : "BROWSING"}
+      <span className={`flex-shrink-0 w-[46px] text-right font-mono text-[7.5px] font-bold ${BAND_TEXT[band]}`}>
+        {band}
       </span>
       <span className="flex-shrink-0 w-8 text-right font-mono text-[8.5px] text-gray-600">
         {m > 0 ? `${m}m${s}s` : `${s}s`}
@@ -140,9 +157,8 @@ function dedupeByIou(preds: Prediction[], thresh = 0.35): Prediction[] {
   return kept;
 }
 
-// ── Object-proximity detection ────────────────────────────────────────────────
-// Determines the closest product that overlaps or is adjacent (within 110px)
-// to a person box. Both coordinate systems are in display (640×480) un-mirrored space.
+// ── Nearby-product detection (server products, display-res coords) ─────────────
+// Finds the closest product overlapping/adjacent to a person box (within 90px).
 
 interface NearbyProduct { label: string; conf: number; inHand: boolean; }
 
@@ -150,25 +166,18 @@ function getNearbyProduct(pred: Prediction, prods: ProductDetection[]): NearbyPr
   if (prods.length === 0) return null;
   const [px1, py1, px2, py2] = pred.box;
   const ph = py2 - py1;
-
   let best: (NearbyProduct & { score: number }) | null = null;
-  const MARGIN = 110; // px, expands person box to catch adjacent products
-
+  const MARGIN = 90;
   for (const prod of prods) {
-    if (prod.conf < 0.4) continue;
+    if (prod.conf < 0.35) continue;
     const [ox1, oy1, ox2, oy2] = prod.box;
-
     const overlapX = Math.max(0, Math.min(px2 + MARGIN, ox2) - Math.max(px1 - MARGIN, ox1));
     const overlapY = Math.max(0, Math.min(py2 + MARGIN, oy2) - Math.max(py1 - MARGIN, oy1));
     if (overlapX <= 0 || overlapY <= 0) continue;
-
     const ocy    = (oy1 + oy2) / 2;
-    const inHand = ocy > py1 + ph * 0.35; // below top 35% = hand / torso zone
+    const inHand = ocy > py1 + ph * 0.3;   // below top 30% of body = hand/torso zone
     const score  = prod.conf * (inHand ? 1.5 : 1.0);
-
-    if (!best || score > best.score) {
-      best = { label: prod.label, conf: prod.conf, inHand, score };
-    }
+    if (!best || score > best.score) best = { label: prod.label, conf: prod.conf, inHand, score };
   }
   return best ? { label: best.label, conf: best.conf, inHand: best.inHand } : null;
 }
@@ -177,13 +186,11 @@ function getNearbyProduct(pred: Prediction, prods: ProductDetection[]): NearbyPr
 
 export function WebcamPredictor() {
   const predMap       = useRef<Map<number, { pred: Prediction; ts: number }>>(new Map());
-  const prevVerdicts  = useRef<Map<number, string>>(new Map());
   const prevIds       = useRef<Set<number>>(new Set());
-  const prevProds     = useRef<ProductDetection[]>([]);
   // Per-subject event cooldowns
   const entrCooldown  = useRef<Map<number, number>>(new Map()); // id  → last ENTR ts
-  const buyCooldown   = useRef<Map<number, number>>(new Map()); // id  → last BUY  ts
   const objCooldown   = useRef<Map<string,  number>>(new Map()); // label → last OBJ ts
+  const prevProds     = useRef<ProductDetection[]>([]);          // products seen last frame
   // Delayed EXIT: only fire after subject is gone for EXIT_DELAY ms
   const disappearedAt = useRef<Map<number, number>>(new Map()); // id → disappeared ts
   const eventIdRef    = useRef(0);
@@ -191,7 +198,6 @@ export function WebcamPredictor() {
   const startRef      = useRef(Date.now());
 
   const ENTR_COOLDOWN = 8_000;   // same subject won't spam ENTR within 8 s
-  const BUY_COOLDOWN  = 20_000;  // same subject won't spam BUY  within 20 s
   const OBJ_COOLDOWN  = 12_000;  // same object label won't spam within 12 s
   const EXIT_DELAY    = 2_500;   // subject must be gone for 2.5 s before EXIT fires
 
@@ -202,6 +208,7 @@ export function WebcamPredictor() {
   const [events, setEvents]           = useState<IntelEvent[]>([]);
 
   const { videoRef, captureCanvas, ready, error, captureFrame } = useWebcam();
+  const meshCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const pushEvent = useCallback((ev: Omit<IntelEvent, "id">) => {
     const id = String(++eventIdRef.current);
@@ -236,20 +243,6 @@ export function WebcamPredictor() {
         }
       }
 
-      // Verdict change events
-      const prev = prevVerdicts.current.get(p.id);
-      if (prev !== p.verdict) {
-        if (p.verdict === "LIKELY BUY") {
-          const lastBuy = buyCooldown.current.get(p.id) ?? 0;
-          if (now - lastBuy > BUY_COOLDOWN) {
-            pushEvent({ ts: now, type: "BUY", body: `Subject #${p.id} — HIGH PURCHASE INTENT ${Math.round(p.prob * 100)}%` });
-            buyCooldown.current.set(p.id, now);
-          }
-        } else if (prev === "LIKELY BUY") {
-          pushEvent({ ts: now, type: "BROWSE", body: `Subject #${p.id} intent dropped → browsing` });
-        }
-        prevVerdicts.current.set(p.id, p.verdict);
-      }
       map.set(p.id, { pred: p, ts: now });
     }
 
@@ -263,7 +256,21 @@ export function WebcamPredictor() {
 
     for (const [id, { ts }] of map) if (now - ts > STALE_MS) map.delete(id);
     setPredictions(Array.from(map.values()).map(v => v.pred));
-  }, [pushEvent, ENTR_COOLDOWN, BUY_COOLDOWN]);
+  }, [pushEvent, ENTR_COOLDOWN]);
+
+  // BAM behaviour events → Intel Feed (backend already cooldown-gates each type)
+  const handleEvents = useCallback((evs: BAMEvent[]) => {
+    for (const ev of evs) {
+      const positive = ev.weight >= 0;
+      const sign = positive ? "+" : "";
+      pushEvent({
+        ts:   ev.ts * 1000,
+        type: positive ? "BAMP" : "BAMN",
+        tag:  ev.type,
+        body: `Subject #${ev.track_id} — ${ev.label} (${sign}${ev.weight.toFixed(0)})`,
+      });
+    }
+  }, [pushEvent]);
 
   // Periodic cleanup — also fires delayed EXIT events
   useEffect(() => {
@@ -280,7 +287,6 @@ export function WebcamPredictor() {
       for (const [id, ts] of disappearedAt.current) {
         if (now - ts >= EXIT_DELAY) {
           pushEvent({ ts: now, type: "EXIT", body: `Subject #${id} exited surveillance zone` });
-          prevVerdicts.current.delete(id);
           disappearedAt.current.delete(id);
         }
       }
@@ -288,18 +294,20 @@ export function WebcamPredictor() {
     return () => clearInterval(id);
   }, [pushEvent, EXIT_DELAY]);
 
+  // Server product detections (YOLOv8). Upscale send-res (320×240) → display (640×480),
+  // same as person boxes, and fire per-label "Object lock" Intel Feed events.
   const handleProducts = useCallback((prods: ProductDetection[]) => {
     const now = Date.now();
-    // Scale product box coords from send-resolution (320×240) → display-resolution (640×480)
     const upscaled = prods.map(p => ({
       ...p,
       box: p.box.map(v => v / FRAME_SEND_SCALE) as ProductDetection["box"],
     }));
     const prevLabels = new Set(prevProds.current.map(p => p.label));
     for (const p of upscaled) {
+      if (p.conf < 0.35) continue;
       const lastT = objCooldown.current.get(p.label) ?? 0;
       if (!prevLabels.has(p.label) && now - lastT > OBJ_COOLDOWN) {
-        pushEvent({ ts: now, type: "OBJ", body: `Object lock: ${p.label} (${Math.round(p.conf * 100)}% conf)` });
+        pushEvent({ ts: now, type: "OBJ", body: `Object lock: ${p.label} (${p.conf.toFixed(2)} conf)` });
         objCooldown.current.set(p.label, now);
       }
     }
@@ -310,13 +318,15 @@ export function WebcamPredictor() {
   const { connected, authError } = usePredictorSocket({
     onPredictions: handlePredictions,
     onProducts:    handleProducts,
+    onEvents:      handleEvents,
     captureFrame,
     webcamReady: ready,
     fps: STREAM_FPS,
   });
 
-  // Face expressions run at 5fps in the browser — no API key needed
-  const faceResults = useFaceExpression(videoRef, connected && ready);
+  // MediaPipe enhancement layer: dense face mesh + hand mesh drawn on top of the
+  // server skeleton. Purely additive — if it fails, the server layer still renders.
+  const { ready: meshReady } = useHolisticLandmarks(videoRef, meshCanvasRef, connected && ready);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -333,42 +343,29 @@ export function WebcamPredictor() {
   // Only show confirmed subjects (dwell >= 2s) in registry/analysis panels.
   // Ghost ByteTrack tracks typically die within 1-2 seconds; this hides them.
   const confirmed  = predictions.filter(p => (p.dwell_sec ?? 0) >= 2);
-  const buyCount   = confirmed.filter(p => p.verdict === "LIKELY BUY").length;
-  const avgProb    = confirmed.length > 0
-    ? confirmed.reduce((s, p) => s + p.prob, 0) / confirmed.length : 0;
+  const hotCount   = confirmed.filter(p => p.band === "HOT").length;
+  const warmCount  = confirmed.filter(p => p.band === "WARM").length;
+  const avgBas     = confirmed.length > 0
+    ? confirmed.reduce((s, p) => s + (p.bas ?? p.prob * 100), 0) / confirmed.length : 0;
 
-  const sorted    = [...confirmed].sort((a, b) =>
-    a.verdict !== b.verdict ? (a.verdict === "LIKELY BUY" ? -1 : 1) : b.prob - a.prob
+  const bandRank = (b?: string) => (b === "HOT" ? 0 : b === "WARM" ? 1 : 2);
+  const sorted   = [...confirmed].sort((a, b) =>
+    bandRank(a.band) !== bandRank(b.band)
+      ? bandRank(a.band) - bandRank(b.band)
+      : (b.bas ?? 0) - (a.bas ?? 0)
   );
   const primary   = sorted[0] ?? null;
   const secondary = sorted.slice(1);
 
-  // Match face-api expression to the nearest prediction by face-centre within body box
-  function getExpression(pred: Prediction): FaceResult | null {
-    // Face is in the top 55% of the body box
-    const topY = pred.box[1];
-    const midY = pred.box[1] + (pred.box[3] - pred.box[1]) * 0.55;
-    let best: FaceResult | null = null, bestDist = Infinity;
-    for (const f of faceResults) {
-      if (f.cx >= pred.box[0] && f.cx <= pred.box[2] && f.cy >= topY && f.cy <= midY) {
-        const dx = f.cx - (pred.box[0] + pred.box[2]) / 2;
-        const dy = f.cy - topY;
-        const d  = Math.hypot(dx, dy);
-        if (d < bestDist) { bestDist = d; best = f; }
-      }
-    }
-    return best;
-  }
-
   const mm = Math.floor(sessionSec / 60), ss = sessionSec % 60;
   const sessionStr = `${String(mm).padStart(2,"0")}:${String(ss).padStart(2,"0")}`;
 
-  const intentLevel = buyCount >= 3 ? "HIGH"
-    : buyCount >= 1 ? "MODERATE"
+  const intentLevel = hotCount >= 1 ? "HIGH"
+    : warmCount >= 1 ? "MODERATE"
     : predictions.length > 0 ? "ACTIVE"
     : "STANDBY";
-  const intentCol = buyCount >= 3 ? "text-red-400"
-    : buyCount >= 1 ? "text-amber-400"
+  const intentCol = hotCount >= 1 ? "text-red-400"
+    : warmCount >= 1 ? "text-amber-400"
     : predictions.length > 0 ? "text-cyan-400"
     : "text-gray-600";
 
@@ -413,10 +410,10 @@ export function WebcamPredictor() {
 
           {/* Live stats pills */}
           {[
-            { label: "SUBJECTS",   val: String(predictions.length), col: predictions.length > 0 ? "text-cyan-400" : "text-gray-600" },
-            { label: "BUY INTENT", val: String(buyCount),           col: buyCount > 0 ? "text-green-400" : "text-gray-600" },
-            { label: "AVG CONF",   val: `${(avgProb * 100).toFixed(0)}%`, col: "text-white" },
-            { label: "SESSION",    val: sessionStr,                 col: "text-white" },
+            { label: "SUBJECTS", val: String(predictions.length), col: predictions.length > 0 ? "text-cyan-400" : "text-gray-600" },
+            { label: "HOT",      val: String(hotCount),           col: hotCount > 0 ? "text-red-400" : "text-gray-600" },
+            { label: "AVG BAS",  val: `${avgBas.toFixed(0)}`,     col: "text-white" },
+            { label: "SESSION",  val: sessionStr,                 col: "text-white" },
           ].map(({ label, val, col }, i) => (
             <div key={i} className="flex items-center gap-1.5">
               {i > 0 && <div className="h-3 w-px bg-white/8" />}
@@ -465,17 +462,20 @@ export function WebcamPredictor() {
               </span>
             </div>
             <div className="flex items-center gap-3">
-              {buyCount > 0 && (
-                <span className="text-[7.5px] font-mono text-green-400 animate-pulse uppercase tracking-widest">
-                  ● {buyCount} High Intent
+              {hotCount > 0 && (
+                <span className="text-[7.5px] font-mono text-red-400 animate-pulse uppercase tracking-widest">
+                  ● {hotCount} Hot Lead{hotCount > 1 ? "s" : ""}
                 </span>
+              )}
+              {connected && ready && meshReady && (
+                <span className="text-[7.5px] font-mono text-cyan-400 uppercase tracking-widest">◈ Mesh</span>
               )}
               <span className="text-[7.5px] font-mono text-gray-700">640×480</span>
             </div>
           </div>
 
           {/* Video */}
-          <div className="flex-1 relative min-h-0">
+          <div className="flex-1 relative min-h-0 flex items-center justify-center">
             {(!ready || !connected) && (
               <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[#020408]">
                 <div className="h-9 w-9 rounded-full border border-gray-800 border-t-cyan-400/80 animate-spin mb-3" />
@@ -485,30 +485,42 @@ export function WebcamPredictor() {
               </div>
             )}
 
-            <video
-              ref={videoRef}
-              autoPlay muted playsInline
-              className="h-full w-full object-cover"
-              style={{ transform: "scaleX(-1)" }}
-            />
+            {/* Camera-aspect stage: the box matches the ACTUAL camera resolution so
+                object-cover becomes a no-crop fill. Video + overlay canvas share this
+                exact box, so the skeleton, person/product boxes, and video register 1:1. */}
+            <div className="relative h-full max-w-full" style={{ aspectRatio: `${frameW} / ${frameH}` }}>
+              <video
+                ref={videoRef}
+                autoPlay muted playsInline
+                className="absolute inset-0 h-full w-full object-cover"
+                style={{ transform: "scaleX(-1)" }}
+              />
 
-            <div className="absolute inset-0 overflow-hidden">
-              <PredictionOverlay predictions={predictions} products={products} frameWidth={frameW} frameHeight={frameH} />
-            </div>
-
-            {/* Scan line */}
-            {ready && connected && (
-              <div className="pointer-events-none absolute inset-0 overflow-hidden">
-                <div className="absolute left-0 right-0 h-px bg-gradient-to-r from-transparent via-cyan-400/25 to-transparent animate-scan" />
+              {/* Server-rendered overlay: COCO-17 skeleton + person boxes + product boxes + gaze rays */}
+              <div className="absolute inset-0 overflow-hidden">
+                <PredictionOverlay predictions={predictions} products={products} frameWidth={frameW} frameHeight={frameH} />
               </div>
-            )}
 
-            {/* Corner brackets */}
-            <div className="pointer-events-none absolute inset-0">
-              <div className="absolute left-2 top-2 h-4 w-4 border-l border-t border-cyan-500/55" />
-              <div className="absolute right-2 top-2 h-4 w-4 border-r border-t border-cyan-500/55" />
-              <div className="absolute left-2 bottom-2 h-4 w-4 border-l border-b border-cyan-500/55" />
-              <div className="absolute right-2 bottom-2 h-4 w-4 border-r border-b border-cyan-500/55" />
+              {/* MediaPipe enhancement layer (on top): dense face mesh + hand mesh */}
+              <canvas
+                ref={meshCanvasRef}
+                className="pointer-events-none absolute inset-0 h-full w-full"
+              />
+
+              {/* Scan line */}
+              {ready && connected && (
+                <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                  <div className="absolute left-0 right-0 h-px bg-gradient-to-r from-transparent via-cyan-400/25 to-transparent animate-scan" />
+                </div>
+              )}
+
+              {/* Corner brackets */}
+              <div className="pointer-events-none absolute inset-0">
+                <div className="absolute left-2 top-2 h-4 w-4 border-l border-t border-cyan-500/55" />
+                <div className="absolute right-2 top-2 h-4 w-4 border-r border-t border-cyan-500/55" />
+                <div className="absolute left-2 bottom-2 h-4 w-4 border-l border-b border-cyan-500/55" />
+                <div className="absolute right-2 bottom-2 h-4 w-4 border-r border-b border-cyan-500/55" />
+              </div>
             </div>
           </div>
 
@@ -525,7 +537,7 @@ export function WebcamPredictor() {
               )}
             </div>
             <span className="text-[7.5px] font-mono text-gray-700">
-              {predictions.length} tracked · {fps}fps · ByteTrack+MediaPipe
+              {predictions.length} tracked · {fps}fps · YOLOv8-Pose + BAM
             </span>
           </div>
         </div>
@@ -557,9 +569,10 @@ export function WebcamPredictor() {
                 <PersonCard
                   p={primary}
                   isPrimary
-                  expression={getExpression(primary)}
+                  expression={null}
                   nearbyProduct={getNearbyProduct(primary, products)}
                 />
+                <PostureTiltPanel posture={primary.posture} />
                 {secondary.length > 0 && (
                   <div className="px-3 pb-3 pt-2 space-y-1.5 border-t border-white/5">
                     <p className="text-[7.5px] font-mono font-bold uppercase tracking-[0.22em] text-gray-700">
