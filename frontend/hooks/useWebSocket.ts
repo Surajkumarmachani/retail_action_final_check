@@ -25,6 +25,7 @@ export function usePredictorSocket(opts: {
   const wsRef       = useRef<WebSocket | null>(null);
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const inFlightRef = useRef(false);
+  const lastSentRef = useRef(0);   // when the in-flight frame was sent (for the stall watchdog)
 
   // Stable refs so ws.onmessage never captures stale closures
   const captureRef  = useRef(captureFrame);
@@ -40,11 +41,12 @@ export function usePredictorSocket(opts: {
   const [authError, setAuthError] = useState<string | null>(null);
 
   const sendFrame = useCallback(() => {
-    if (inFlightRef.current) return;          // don't stack up frames
+    if (inFlightRef.current) return;          // STRICTLY 1 frame in flight — never buffer
     const frame = captureRef.current();
     const ws    = wsRef.current;
     if (frame && ws?.readyState === WebSocket.OPEN) {
       inFlightRef.current = true;
+      lastSentRef.current = Date.now();
       ws.send(JSON.stringify({ type: "frame", data: frame }));
     }
   }, []);
@@ -57,10 +59,16 @@ export function usePredictorSocket(opts: {
   const startStreaming = useCallback(() => {
     stopStreaming();
     sendFrame();                             // kick off the fire-on-reply chain
-    // Fallback: if the chain stalls (dropped response), restart after 500ms
+    // Stall watchdog: ONLY resend if a frame has been in flight with no reply for >1.5s
+    // (a genuinely dropped response). Never force-sends otherwise — this keeps exactly
+    // one frame in flight so the backend always processes the FRESHEST frame (no lag buildup).
     timerRef.current = setInterval(() => {
-      inFlightRef.current = false;
-      sendFrame();
+      if (inFlightRef.current && Date.now() - lastSentRef.current > 1500) {
+        inFlightRef.current = false;
+        sendFrame();
+      } else if (!inFlightRef.current) {
+        sendFrame();                         // restart chain if it ever idled out
+      }
     }, 500);
   }, [sendFrame, stopStreaming]);
 

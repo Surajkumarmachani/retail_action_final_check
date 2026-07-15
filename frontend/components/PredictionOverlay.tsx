@@ -160,7 +160,7 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
         // Lerp product box for smooth movement (150ms window, keyed by label)
         const pstate = prodBoxStates.current.get(prod.label);
         const rawProd: Box = pstate
-          ? pstate.from.map((v, i) => v + (pstate.to[i] - v) * Math.min(1, (now - pstate.startT) / 150)) as Box
+          ? pstate.from.map((v, i) => v + (pstate.to[i] - v) * Math.min(1, (now - pstate.startT) / 70)) as Box
           : prod.box;
         const [_x1, _y1, _x2, _y2] = rawProd;
         const x1 = w - _x2;
@@ -173,29 +173,27 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
         const cy = (y1 + y2) / 2;
         const cs = Math.min(bw, bh, 22);
 
-        // Pulsing cyan fill
-        const pa = 0.06 + Math.sin(phase * 3.5) * 0.025;
-        ctx.fillStyle = `rgba(6,182,212,${pa})`;
+        // Pulsing green fill
+        const pa = 0.07 + Math.sin(phase * 3.5) * 0.03;
+        ctx.fillStyle = `rgba(22,163,74,${pa})`;
         ctx.fillRect(x1, y1, bw, bh);
 
-        // Dashed cyan border with glow
+        // Solid dark-green border with glow
         ctx.save();
-        ctx.shadowColor = "rgba(6,182,212,0.5)";
-        ctx.shadowBlur  = 16;
-        ctx.strokeStyle = "rgba(6,182,212,0.85)";
-        ctx.lineWidth   = 1.5;
-        ctx.setLineDash([6, 4]);
+        ctx.shadowColor = "rgba(22,163,74,0.55)";
+        ctx.shadowBlur  = 14;
+        ctx.strokeStyle = "#16a34a";
+        ctx.lineWidth   = 2;
         ctx.strokeRect(x1, y1, bw, bh);
-        ctx.setLineDash([]);
         ctx.restore();
 
-        // Animated corner brackets
+        // Animated corner brackets (green)
         const ca = 0.7 + Math.sin(phase * 2.2) * 0.3;
         ctx.save();
-        ctx.strokeStyle = "#22d3ee";
-        ctx.lineWidth   = 2.5;
+        ctx.strokeStyle = "#22c55e";
+        ctx.lineWidth   = 3;
         ctx.lineCap     = "round";
-        ctx.shadowColor = "#06b6d4";
+        ctx.shadowColor = "#16a34a";
         ctx.shadowBlur  = 10;
         ctx.globalAlpha = ca;
         for (const [bx, by, dx, dy] of [
@@ -214,39 +212,40 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
         ctx.save();
         ctx.beginPath();
         ctx.arc(cx, cy, 3.5, 0, Math.PI * 2);
-        ctx.fillStyle   = "rgba(103,232,249,0.9)";
-        ctx.shadowColor = "#06b6d4";
+        ctx.fillStyle   = "rgba(134,239,172,0.95)";
+        ctx.shadowColor = "#16a34a";
         ctx.shadowBlur  = 8;
         ctx.fill();
         ctx.restore();
 
-        // Label chip — yolo_demo format, e.g. "cup 0.90"
-        const label = `${prod.label} ${prod.conf.toFixed(2)}`;
-        ctx.font = "700 11px ui-monospace, monospace";
+        // Bold product name chip — e.g. "CUP 0.90"
+        const label = `${prod.label.toUpperCase()}  ${prod.conf.toFixed(2)}`;
+        ctx.font = "800 14px ui-monospace, monospace";
         const tw = ctx.measureText(label).width;
         const lx = x1;
-        const ly = y1 > 30 ? y1 - 28 : y2 + 4;
+        const ly = y1 > 32 ? y1 - 30 : y2 + 4;
 
         ctx.save();
-        ctx.shadowColor = "rgba(6,182,212,0.6)";
+        ctx.shadowColor = "rgba(22,163,74,0.6)";
         ctx.shadowBlur  = 8;
-        roundRect(ctx, lx, ly, tw + 16, 22, 4);
-        ctx.fillStyle   = "rgba(6,30,40,0.95)";
+        roundRect(ctx, lx, ly, tw + 18, 24, 5);
+        ctx.fillStyle   = "rgba(6,30,15,0.95)";
         ctx.fill();
-        ctx.strokeStyle = "rgba(6,182,212,0.6)";
+        ctx.strokeStyle = "rgba(22,163,74,0.75)";
         ctx.lineWidth   = 1;
         ctx.stroke();
         ctx.restore();
 
-        ctx.fillStyle = "#67e8f9";
-        ctx.font      = "700 11px ui-monospace, monospace";
-        ctx.fillText(label, lx + 8, ly + 15);
+        ctx.fillStyle = "#dcfce7";
+        ctx.font      = "800 14px ui-monospace, monospace";
+        ctx.fillText(label, lx + 9, ly + 16);
       }
 
       // ── Person boxes + skeleton ─────────────────────────────────────────
       for (const p of preds) {
         const band = p.band ?? "COLD";
-        const col  = BAND_COL[band] ?? BAND_COL.COLD;
+        const col  = BAND_COL[band] ?? BAND_COL.COLD;   // band tint (BAS bar / label chip)
+        const boxCol = "#16a34a";                        // dark-green person boundary
         const isHot = band === "HOT";
 
         // Lerp box coordinates for smooth motion
@@ -285,6 +284,7 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
         if (kps && kps.length >= 17) {
           const KX = (kp: Keypoint) => w - kp[0] * w;   // mirror to match CSS scaleX(-1)
           const KY = (kp: Keypoint) => kp[1] * h;
+
           // bones
           ctx.save();
           ctx.strokeStyle = "#22c55e";
@@ -309,36 +309,6 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
             ctx.fill();
           }
           ctx.restore();
-
-          // ── Gaze rays: eyes → nearest product (amber, like AcuPosture) ──
-          const le = kps[1], re = kps[2];
-          if (prods.length && (le?.[2] >= 0.3 || re?.[2] >= 0.3)) {
-            let tx = 0, ty = 0, bestD = Infinity;
-            for (const prod of prods) {
-              if (prod.conf < 0.35) continue;
-              const pcx = w - (prod.box[0] + prod.box[2]) / 2;
-              const pcy = (prod.box[1] + prod.box[3]) / 2;
-              const d = Math.hypot(pcx - cx, pcy - cy);
-              if (d < bestD) { bestD = d; tx = pcx; ty = pcy; }
-            }
-            if (bestD < Infinity && bestD < Math.max(bw, bh) * 2.2) {
-              ctx.save();
-              ctx.strokeStyle = "rgba(245,158,11,0.75)";
-              ctx.lineWidth = 1.5;
-              ctx.setLineDash([5, 4]);
-              ctx.shadowColor = "#f59e0b";
-              ctx.shadowBlur  = 4;
-              for (const eye of [le, re]) {
-                if (!eye || eye[2] < 0.3) continue;
-                ctx.beginPath();
-                ctx.moveTo(KX(eye), KY(eye));
-                ctx.lineTo(tx, ty);
-                ctx.stroke();
-              }
-              ctx.setLineDash([]);
-              ctx.restore();
-            }
-          }
         }
 
         // Trail
@@ -368,22 +338,22 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
           }
         }
 
-        // Glowing bounding box
+        // Glowing bounding box (dark-green boundary)
         ctx.save();
-        ctx.shadowColor = col;
-        ctx.shadowBlur  = isHot ? 14 : 6;
-        ctx.strokeStyle = col;
-        ctx.lineWidth   = isHot ? 2 : 1.5;
+        ctx.shadowColor = boxCol;
+        ctx.shadowBlur  = isHot ? 12 : 6;
+        ctx.strokeStyle = boxCol;
+        ctx.lineWidth   = isHot ? 2.5 : 2;
         ctx.strokeRect(x1, y1, bw, bh);
         ctx.restore();
 
-        // Animated corner brackets
+        // Animated corner brackets (green)
         const ca = 0.65 + Math.sin(phase * 2.5 + p.id) * 0.35;
         ctx.save();
-        ctx.strokeStyle = col;
-        ctx.lineWidth   = 3;
+        ctx.strokeStyle = boxCol;
+        ctx.lineWidth   = 3.5;
         ctx.lineCap     = "round";
-        ctx.shadowColor = col;
+        ctx.shadowColor = boxCol;
         ctx.shadowBlur  = 10;
         ctx.globalAlpha = ca;
         for (const [bx, by, dx, dy] of [
@@ -398,25 +368,28 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
         }
         ctx.restore();
 
-        // Label — #id  BAS  BAND
+        // Label — "Person N  BAS  BAND" (bold)
         const bas   = Math.round(p.bas ?? (p.prob * 100));
-        const label = `#${p.id}  ${bas}  ${band}`;
-        ctx.font = "bold 11px ui-monospace, monospace";
+        const label = `Person ${p.personNo ?? p.id}  ·  ${bas}  ${band}`;
+        ctx.font = "800 13px ui-monospace, monospace";
         const tw = ctx.measureText(label).width;
         const lx = x1;
-        const ly = y1 > 30 ? y1 - 28 : y2 + 4;
+        const ly = y1 > 32 ? y1 - 30 : y2 + 4;
 
         ctx.save();
-        ctx.shadowColor = col;
+        ctx.shadowColor = boxCol;
         ctx.shadowBlur  = 8;
-        roundRect(ctx, lx, ly, tw + 14, 22, 4);
-        ctx.fillStyle = isHot ? "rgba(80,10,10,0.95)" : band === "WARM" ? "rgba(80,50,5,0.95)" : "rgba(20,40,90,0.95)";
+        roundRect(ctx, lx, ly, tw + 18, 24, 5);
+        ctx.fillStyle = "rgba(6,30,15,0.95)";
         ctx.fill();
+        ctx.strokeStyle = "rgba(22,163,74,0.7)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
         ctx.restore();
 
-        ctx.fillStyle = "#fff";
-        ctx.font      = "bold 11px ui-monospace, monospace";
-        ctx.fillText(label, lx + 7, ly + 14);
+        ctx.fillStyle = "#dcfce7";
+        ctx.font      = "800 13px ui-monospace, monospace";
+        ctx.fillText(label, lx + 9, ly + 16);
 
         // BAS bar at box bottom
         ctx.fillStyle = "rgba(0,0,0,0.5)";

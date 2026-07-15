@@ -203,10 +203,10 @@ export function MiniCard({ p }: { p: Prediction }) {
       band === "HOT" ? "border-red-500/20 bg-red-950/15" : band === "WARM" ? "border-amber-500/20 bg-amber-950/10" : "border-white/5 bg-white/[0.015]"
     }`}>
       <div className="flex-shrink-0">
-        <div className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold ${
+        <div className={`h-8 w-8 rounded-full flex items-center justify-center text-[10px] font-bold ${
           band === "HOT" ? "bg-red-900/60 text-red-300" : band === "WARM" ? "bg-amber-900/50 text-amber-300" : "bg-gray-800 text-gray-400"
         }`}>
-          #{p.id}
+          P{p.personNo ?? p.id}
         </div>
       </div>
       <div className="flex-1 min-w-0">
@@ -277,8 +277,8 @@ export function PersonCard({
         <div className="flex items-start justify-between mb-3">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-[10px] font-mono uppercase text-gray-600">Customer</span>
-              <span className="text-base font-black text-white">#{p.id}</span>
+              <span className="text-[10px] font-mono uppercase text-gray-600">Person</span>
+              <span className="text-base font-black text-white">{p.personNo ?? p.id}</span>
               {isPrimary && isHot && (
                 <span className="rounded-full bg-red-500 px-2 py-0.5 text-[8px] font-extrabold uppercase tracking-widest text-black">
                   TOP
@@ -366,23 +366,48 @@ export function PersonCard({
         )}
       </div>
 
-      {/* Band verdict highlight */}
-      <div className={`mx-3 mb-3 rounded-xl p-3 transition-all duration-700 ${
-        isHot
-          ? "bg-red-950/60 border border-red-500/30"
+      {/* Purchase Intent — retail summary + recommended action */}
+      {(() => {
+        const pct = Math.round(bas);
+        const action = isHot
+          ? "⚡ Approach & assist now — high conversion window"
           : band === "WARM"
-            ? "bg-amber-950/40 border border-amber-500/25"
-            : "bg-white/3 border border-white/5"
-      }`}>
-        <div className="flex items-center gap-2.5">
-          <span className="text-2xl leading-none">{meta.icon}</span>
-          <div className="flex-1 min-w-0">
-            <p className={`text-sm font-bold ${meta.text}`}>{meta.label}</p>
-            <p className="text-[10px] text-gray-600 mt-0.5">{meta.desc}</p>
+            ? "🛒 Monitor — engaged, be ready to help"
+            : "🔄 Browsing — low priority";
+        return (
+          <div className={`mx-3 mb-3 rounded-xl p-3 transition-all duration-700 ${
+            isHot
+              ? "bg-red-950/60 border border-red-500/30"
+              : band === "WARM"
+                ? "bg-amber-950/40 border border-amber-500/25"
+                : "bg-white/[0.03] border border-white/5"
+          }`}>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-gray-500">Purchase Intent</span>
+              <span className={`text-[9px] font-mono font-bold ${meta.text}`}>{meta.label}</span>
+            </div>
+            <div className="flex items-end gap-2">
+              <span className="text-3xl font-black leading-none" style={{ color: meta.ring }}>{pct}%</span>
+              <span className="text-[10px] text-gray-500 mb-1">likelihood to buy</span>
+            </div>
+            <div className="mt-2 h-1.5 rounded-full bg-gray-800 overflow-hidden">
+              <div className="h-full rounded-full transition-all duration-700"
+                style={{ width: `${Math.min(100, pct)}%`, backgroundColor: meta.ring }} />
+            </div>
+            {nearbyProduct && (
+              <p className="mt-2 text-[11px] text-gray-300">
+                {nearbyProduct.inHand ? "Holding" : "Considering"}:{" "}
+                <span className="font-bold text-amber-300">{nearbyProduct.label}</span>
+                <span className="text-gray-600"> · {Math.round(nearbyProduct.conf * 100)}%</span>
+              </p>
+            )}
+            <div className="mt-2 flex items-center gap-2 rounded-lg bg-black/30 px-2.5 py-1.5">
+              <span className={`text-[11px] font-semibold leading-tight ${meta.text}`}>{action}</span>
+              {isHot && <div className="ml-auto h-2.5 w-2.5 flex-shrink-0 rounded-full bg-red-400 animate-pulse" />}
+            </div>
           </div>
-          {isHot && <div className="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-red-400 animate-pulse" />}
-        </div>
-      </div>
+        );
+      })()}
     </div>
   );
 }

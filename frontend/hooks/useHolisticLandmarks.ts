@@ -71,7 +71,9 @@ export function useHolisticLandmarks(
   const tsRef      = useRef(0);
   const tessRef    = useRef<Conn[] | null>(null);
 
-  const DETECT_FPS = 30, MIN_DT = 1000 / DETECT_FPS;
+  // Throttle the face/hand mesh to 15fps — it runs on the main thread, so a lower rate
+  // frees the thread for video rendering + the prediction WebSocket loop (higher overall fps).
+  const DETECT_FPS = 15, MIN_DT = 1000 / DETECT_FPS;
 
   useEffect(() => {
     if (!active) return;

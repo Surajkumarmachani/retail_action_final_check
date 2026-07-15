@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef, useState, ReactNode } from "react";
 import { signOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
-import { Prediction, ProductDetection, BAMEvent, BAMBand } from "@/lib/types";
+import { Prediction, BAMEvent, BAMBand } from "@/lib/types";
 import { useWebcam, FRAME_SEND_SCALE } from "@/hooks/useWebcam";
 import { usePredictorSocket } from "@/hooks/useWebSocket";
-import { useHolisticLandmarks } from "@/hooks/useHolisticLandmarks";
+import { useObjectDetector, type DetObject } from "@/hooks/useObjectDetector";
 import { PredictionOverlay } from "./PredictionOverlay";
 import { PersonCard, MiniCard } from "./PersonCard";
 import { PostureTiltPanel } from "./PostureTiltPanel";
@@ -112,7 +112,7 @@ function SubjectRow({ p }: { p: Prediction }) {
   return (
     <div className={`flex items-center gap-2 px-3 py-1.5 border-b border-white/[0.04] ${band === "HOT" ? "bg-red-950/20" : band === "WARM" ? "bg-amber-950/10" : ""}`}>
       <div className={`flex-shrink-0 h-1.5 w-1.5 rounded-full ${BAND_DOT[band]}`} />
-      <span className="flex-shrink-0 w-7 font-mono text-[10px] font-bold text-gray-300">#{p.id}</span>
+      <span className="flex-shrink-0 w-14 font-mono text-[10px] font-bold text-gray-300">P{p.personNo ?? p.id}</span>
       <div className="flex-1 h-[3px] rounded-full bg-gray-800/80 overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-500 ${BAND_BAR[band]}`}
@@ -157,27 +157,28 @@ function dedupeByIou(preds: Prediction[], thresh = 0.35): Prediction[] {
   return kept;
 }
 
-// ── Nearby-product detection (server products, display-res coords) ─────────────
-// Finds the closest product overlapping/adjacent to a person box (within 90px).
+// ── Nearby-product detection (client objects, normalised coords) ───────────────
+// Finds the closest client-detected object overlapping/adjacent to a person box.
 
 interface NearbyProduct { label: string; conf: number; inHand: boolean; }
 
-function getNearbyProduct(pred: Prediction, prods: ProductDetection[]): NearbyProduct | null {
-  if (prods.length === 0) return null;
-  const [px1, py1, px2, py2] = pred.box;
+function getNearbyProduct(pred: Prediction, objs: DetObject[], fw: number, fh: number): NearbyProduct | null {
+  if (!objs.length) return null;
+  // person box → normalised (client object boxes are normalised)
+  const px1 = pred.box[0] / fw, py1 = pred.box[1] / fh, px2 = pred.box[2] / fw, py2 = pred.box[3] / fh;
   const ph = py2 - py1;
+  const M = 0.14;
   let best: (NearbyProduct & { score: number }) | null = null;
-  const MARGIN = 90;
-  for (const prod of prods) {
-    if (prod.conf < 0.35) continue;
-    const [ox1, oy1, ox2, oy2] = prod.box;
-    const overlapX = Math.max(0, Math.min(px2 + MARGIN, ox2) - Math.max(px1 - MARGIN, ox1));
-    const overlapY = Math.max(0, Math.min(py2 + MARGIN, oy2) - Math.max(py1 - MARGIN, oy1));
+  for (const o of objs) {
+    if (o.score < 0.35) continue;
+    const [ox1, oy1, ox2, oy2] = o.box;
+    const overlapX = Math.max(0, Math.min(px2 + M, ox2) - Math.max(px1 - M, ox1));
+    const overlapY = Math.max(0, Math.min(py2 + M, oy2) - Math.max(py1 - M, oy1));
     if (overlapX <= 0 || overlapY <= 0) continue;
     const ocy    = (oy1 + oy2) / 2;
-    const inHand = ocy > py1 + ph * 0.3;   // below top 30% of body = hand/torso zone
-    const score  = prod.conf * (inHand ? 1.5 : 1.0);
-    if (!best || score > best.score) best = { label: prod.label, conf: prod.conf, inHand, score };
+    const inHand = ocy > py1 + ph * 0.3;
+    const score  = o.score * (inHand ? 1.5 : 1.0);
+    if (!best || score > best.score) best = { label: o.label, conf: o.score, inHand, score };
   }
   return best ? { label: best.label, conf: best.conf, inHand: best.inHand } : null;
 }
@@ -187,10 +188,12 @@ function getNearbyProduct(pred: Prediction, prods: ProductDetection[]): NearbyPr
 export function WebcamPredictor() {
   const predMap       = useRef<Map<number, { pred: Prediction; ts: number }>>(new Map());
   const prevIds       = useRef<Set<number>>(new Set());
-  // Per-subject event cooldowns
+  // Map raw ByteTrack IDs → stable, recycled sequential numbers (Person 1, 2, 3…)
+  const personNoMap   = useRef<Map<number, number>>(new Map());
+  // Per-subject / object event cooldowns
   const entrCooldown  = useRef<Map<number, number>>(new Map()); // id  → last ENTR ts
   const objCooldown   = useRef<Map<string,  number>>(new Map()); // label → last OBJ ts
-  const prevProds     = useRef<ProductDetection[]>([]);          // products seen last frame
+  const prevObjLabels = useRef<Set<string>>(new Set());          // client object labels last tick
   // Delayed EXIT: only fire after subject is gone for EXIT_DELAY ms
   const disappearedAt = useRef<Map<number, number>>(new Map()); // id → disappeared ts
   const eventIdRef    = useRef(0);
@@ -202,13 +205,12 @@ export function WebcamPredictor() {
   const EXIT_DELAY    = 2_500;   // subject must be gone for 2.5 s before EXIT fires
 
   const [predictions, setPredictions] = useState<Prediction[]>([]);
-  const [products, setProducts]       = useState<ProductDetection[]>([]);
   const [sessionSec, setSessionSec]   = useState(0);
   const [fps, setFps]                 = useState(0);
   const [events, setEvents]           = useState<IntelEvent[]>([]);
 
   const { videoRef, captureCanvas, ready, error, captureFrame } = useWebcam();
-  const meshCanvasRef = useRef<HTMLCanvasElement>(null);
+  const productCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const pushEvent = useCallback((ev: Omit<IntelEvent, "id">) => {
     const id = String(++eventIdRef.current);
@@ -230,6 +232,15 @@ export function WebcamPredictor() {
     const deduped = dedupeByIou(upscaled);
     const curIds  = new Set(deduped.map(p => p.id));
 
+    // Assign stable, recycled person numbers (Person 1, 2, 3…) to active tracks
+    const pm = personNoMap.current;
+    const usedNos = new Set(pm.values());
+    for (const p of deduped) {
+      let n = pm.get(p.id);
+      if (n === undefined) { n = 1; while (usedNos.has(n)) n++; pm.set(p.id, n); usedNos.add(n); }
+      p.personNo = n;
+    }
+
     for (const p of deduped) {
       // Cancel any pending EXIT for this subject (it reappeared)
       disappearedAt.current.delete(p.id);
@@ -238,7 +249,7 @@ export function WebcamPredictor() {
       if (!prevIds.current.has(p.id)) {
         const lastEntr = entrCooldown.current.get(p.id) ?? 0;
         if (now - lastEntr > ENTR_COOLDOWN) {
-          pushEvent({ ts: now, type: "ENTRY", body: `Subject #${p.id} entered surveillance zone` });
+          pushEvent({ ts: now, type: "ENTRY", body: `Person ${p.personNo} entered surveillance zone` });
           entrCooldown.current.set(p.id, now);
         }
       }
@@ -263,11 +274,12 @@ export function WebcamPredictor() {
     for (const ev of evs) {
       const positive = ev.weight >= 0;
       const sign = positive ? "+" : "";
+      const who  = personNoMap.current.get(ev.track_id);
       pushEvent({
         ts:   ev.ts * 1000,
         type: positive ? "BAMP" : "BAMN",
         tag:  ev.type,
-        body: `Subject #${ev.track_id} — ${ev.label} (${sign}${ev.weight.toFixed(0)})`,
+        body: `Person ${who ?? ev.track_id} — ${ev.label} (${sign}${ev.weight.toFixed(0)})`,
       });
     }
   }, [pushEvent]);
@@ -279,14 +291,15 @@ export function WebcamPredictor() {
       const map = predMap.current;
       let changed = false;
 
-      // Stale prediction cleanup
-      for (const [id, { ts }] of map) if (now - ts > STALE_MS) { map.delete(id); changed = true; }
+      // Stale prediction cleanup (also frees the person's recycled number)
+      for (const [id, { ts }] of map) if (now - ts > STALE_MS) { map.delete(id); personNoMap.current.delete(id); changed = true; }
       if (changed) setPredictions(Array.from(map.values()).map(v => v.pred));
 
       // Fire EXIT events for subjects gone longer than EXIT_DELAY
       for (const [id, ts] of disappearedAt.current) {
         if (now - ts >= EXIT_DELAY) {
-          pushEvent({ ts: now, type: "EXIT", body: `Subject #${id} exited surveillance zone` });
+          const who = personNoMap.current.get(id);
+          pushEvent({ ts: now, type: "EXIT", body: `Person ${who ?? id} exited surveillance zone` });
           disappearedAt.current.delete(id);
         }
       }
@@ -294,39 +307,31 @@ export function WebcamPredictor() {
     return () => clearInterval(id);
   }, [pushEvent, EXIT_DELAY]);
 
-  // Server product detections (YOLOv8). Upscale send-res (320×240) → display (640×480),
-  // same as person boxes, and fire per-label "Object lock" Intel Feed events.
-  const handleProducts = useCallback((prods: ProductDetection[]) => {
-    const now = Date.now();
-    const upscaled = prods.map(p => ({
-      ...p,
-      box: p.box.map(v => v / FRAME_SEND_SCALE) as ProductDetection["box"],
-    }));
-    const prevLabels = new Set(prevProds.current.map(p => p.label));
-    for (const p of upscaled) {
-      if (p.conf < 0.35) continue;
-      const lastT = objCooldown.current.get(p.label) ?? 0;
-      if (!prevLabels.has(p.label) && now - lastT > OBJ_COOLDOWN) {
-        pushEvent({ ts: now, type: "OBJ", body: `Object lock: ${p.label} (${p.conf.toFixed(2)} conf)` });
-        objCooldown.current.set(p.label, now);
-      }
-    }
-    prevProds.current = upscaled;
-    setProducts(upscaled);
-  }, [pushEvent, OBJ_COOLDOWN]);
-
   const { connected, authError } = usePredictorSocket({
     onPredictions: handlePredictions,
-    onProducts:    handleProducts,
     onEvents:      handleEvents,
     captureFrame,
     webcamReady: ready,
     fps: STREAM_FPS,
   });
 
-  // MediaPipe enhancement layer: dense face mesh + hand mesh drawn on top of the
-  // server skeleton. Purely additive — if it fails, the server layer still renders.
-  const { ready: meshReady } = useHolisticLandmarks(videoRef, meshCanvasRef, connected && ready);
+  // Client-side product detection — runs in-browser on the GPU, drawn on productCanvas.
+  // Instant appear/disappear (no server round-trip).
+  const { objects } = useObjectDetector(videoRef, productCanvasRef, connected && ready);
+
+  // Object-lock events from client detections (instant), per-label cooldown
+  useEffect(() => {
+    const now = Date.now();
+    const cur = new Set(objects.map(o => o.label));
+    for (const o of objects) {
+      const lastT = objCooldown.current.get(o.label) ?? 0;
+      if (!prevObjLabels.current.has(o.label) && now - lastT > OBJ_COOLDOWN) {
+        pushEvent({ ts: now, type: "OBJ", body: `Object lock: ${o.label} (${o.score.toFixed(2)} conf)` });
+        objCooldown.current.set(o.label, now);
+      }
+    }
+    prevObjLabels.current = cur;
+  }, [objects, pushEvent, OBJ_COOLDOWN]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -467,9 +472,6 @@ export function WebcamPredictor() {
                   ● {hotCount} Hot Lead{hotCount > 1 ? "s" : ""}
                 </span>
               )}
-              {connected && ready && meshReady && (
-                <span className="text-[7.5px] font-mono text-cyan-400 uppercase tracking-widest">◈ Mesh</span>
-              )}
               <span className="text-[7.5px] font-mono text-gray-700">640×480</span>
             </div>
           </div>
@@ -496,14 +498,14 @@ export function WebcamPredictor() {
                 style={{ transform: "scaleX(-1)" }}
               />
 
-              {/* Server-rendered overlay: COCO-17 skeleton + person boxes + product boxes + gaze rays */}
+              {/* Server-rendered overlay: green skeleton + person boxes + BAM labels */}
               <div className="absolute inset-0 overflow-hidden">
-                <PredictionOverlay predictions={predictions} products={products} frameWidth={frameW} frameHeight={frameH} />
+                <PredictionOverlay predictions={predictions} products={[]} frameWidth={frameW} frameHeight={frameH} />
               </div>
 
-              {/* MediaPipe enhancement layer (on top): dense face mesh + hand mesh */}
+              {/* Client-side product boxes — instant, drawn locally (no server round-trip) */}
               <canvas
-                ref={meshCanvasRef}
+                ref={productCanvasRef}
                 className="pointer-events-none absolute inset-0 h-full w-full"
               />
 
@@ -530,14 +532,14 @@ export function WebcamPredictor() {
               {connected && (
                 <span className="text-[7.5px] font-mono uppercase tracking-widest text-cyan-500/80">◉ AI Active</span>
               )}
-              {products.length > 0 && (
-                <span className="text-[7.5px] font-mono text-amber-500 uppercase tracking-widest">
-                  ◈ {products.length} Object{products.length > 1 ? "s" : ""} Locked
+              {objects.length > 0 && (
+                <span className="text-[7.5px] font-mono text-green-500 uppercase tracking-widest">
+                  ◈ {objects.length} Object{objects.length > 1 ? "s" : ""} Locked
                 </span>
               )}
             </div>
             <span className="text-[7.5px] font-mono text-gray-700">
-              {predictions.length} tracked · {fps}fps · YOLOv8-Pose + BAM
+              {predictions.length} tracked · {fps}fps · Pose+BAM (server) · Objects (client)
             </span>
           </div>
         </div>
@@ -561,7 +563,7 @@ export function WebcamPredictor() {
           {/* Behavioral Analysis */}
           <Panel
             title="Behavioral Analysis"
-            badge={primary ? `Subject #${primary.id}` : undefined}
+            badge={primary ? `Person ${primary.personNo ?? primary.id}` : undefined}
             className="flex-1 min-h-0"
           >
             {primary ? (
@@ -570,7 +572,7 @@ export function WebcamPredictor() {
                   p={primary}
                   isPrimary
                   expression={null}
-                  nearbyProduct={getNearbyProduct(primary, products)}
+                  nearbyProduct={getNearbyProduct(primary, objects, frameW, frameH)}
                 />
                 <PostureTiltPanel posture={primary.posture} />
                 {secondary.length > 0 && (

@@ -50,8 +50,11 @@ def _pick_device() -> str:
     return "cpu"
 
 DEVICE = _pick_device()
-INFER_IMGSZ = int(os.environ.get("BAM_IMGSZ", "320"))  # match the 320-wide sent frame
-logger.info("BAM inference device=%s  imgsz=%d", DEVICE, INFER_IMGSZ)
+INFER_IMGSZ  = int(os.environ.get("BAM_IMGSZ", "320"))       # pose (matches sent frame width)
+DETECT_IMGSZ = int(os.environ.get("BAM_DETECT_IMGSZ", "448"))  # seg/products — larger = better recall
+SEG_EVERY    = int(os.environ.get("BAM_SEG_EVERY", "1"))       # segment every frame (fast on MPS) for instant product ID
+logger.info("BAM device=%s  pose_imgsz=%d  detect_imgsz=%d  seg_every=%d",
+            DEVICE, INFER_IMGSZ, DETECT_IMGSZ, SEG_EVERY)
 
 # COCO class names (index → label); class 0 = person handled by the pose model
 _COCO_NAMES: Dict[int, str] = {
@@ -114,8 +117,8 @@ class BAMTracker:
         store_format: str = "lifestyle",
     ) -> None:
         from ultralytics import YOLO
-        self.pose   = YOLO(pose_path)      # yolov8n-pose.pt  (persons + skeleton + IDs)
-        self.detect = YOLO(detect_path)    # yolov8n.pt        (products)
+        self.pose   = YOLO(pose_path)     # yolov8n-pose.pt  (persons + skeleton + IDs)
+        self.detect = YOLO(detect_path)   # yolov8n.pt        (product detection — light & fast)
         self.event_detector = YOLOEventDetector()
         self.engine = BAMScoringEngine(store_format=store_format, max_workers=4)
 
@@ -128,7 +131,7 @@ class BAMTracker:
         try:
             warm = np.zeros((INFER_IMGSZ, INFER_IMGSZ, 3), dtype=np.uint8)
             self.pose.predict(warm, device=DEVICE, imgsz=INFER_IMGSZ, verbose=False)
-            self.detect.predict(warm, device=DEVICE, imgsz=INFER_IMGSZ, verbose=False)
+            self.detect.predict(warm, device=DEVICE, imgsz=DETECT_IMGSZ, verbose=False)
         except Exception as exc:
             logger.warning("Model warmup failed (continuing): %s", exc)
 
@@ -152,7 +155,7 @@ def process_frame_bam(
                   weight, conf, ts} for the Intel Feed.
     """
     tracker.frame_count += 1
-    do_detect = (tracker.frame_count % SAMPLE_EVERY == 0)
+    do_detect = (tracker.frame_count % SEG_EVERY == 0)
     h, w = frame.shape[:2]
     now  = time.time()
 
@@ -164,7 +167,7 @@ def process_frame_bam(
         tracker="bytetrack.yaml", device=DEVICE, imgsz=INFER_IMGSZ,
     )
 
-    # ── 2. Product detection (cached between sample frames) ───────────────────
+    # ── 2. Product detection (every frame for snappy product ID) ─────────────
     if do_detect:
         tracker.last_products = _detect_products(frame, tracker)
     products = tracker.last_products
@@ -316,7 +319,7 @@ def _posture_metrics(kp_xyn: np.ndarray, kconf, w: int, h: int) -> Dict[str, Any
     return out
 
 
-# ── Product detection ─────────────────────────────────────────────────────────
+# ── Product detection (non-person COCO classes) ───────────────────────────────
 
 def _detect_products(
     frame: np.ndarray,
@@ -327,24 +330,20 @@ def _detect_products(
     h, w = frame.shape[:2]
     try:
         res = tracker.detect.predict(
-            frame,
-            classes=list(range(1, 80)),   # all COCO classes except person
-            conf=conf_threshold,
-            verbose=False,
-            device=DEVICE,
-            imgsz=INFER_IMGSZ,
+            frame, classes=list(range(1, 80)), conf=conf_threshold,
+            verbose=False, device=DEVICE, imgsz=DETECT_IMGSZ,
         )
     except Exception as exc:
         logger.warning("Product detection error: %s", exc)
         return []
 
-    if not res or res[0].boxes is None:
+    r = res[0] if res else None
+    if r is None or r.boxes is None:
         return []
 
-    boxes   = res[0].boxes
-    xyxy    = boxes.xyxy.cpu().numpy()
-    cls_ids = boxes.cls.cpu().numpy().astype(int)
-    confs   = boxes.conf.cpu().numpy()
+    xyxy    = r.boxes.xyxy.cpu().numpy()
+    cls_ids = r.boxes.cls.cpu().numpy().astype(int)
+    confs   = r.boxes.conf.cpu().numpy()
 
     products: List[Dict[str, Any]] = []
     for box, cls_id, conf in zip(xyxy, cls_ids, confs):

@@ -18,17 +18,17 @@ from typing import Final, NamedTuple
 # Constants — never magic-numbered elsewhere
 # ─────────────────────────────────────────────────────────────────────────────
 
-DECAY_HALF_LIFE_S: Final[float] = 270.0          # §4.1 — configurable per store
+DECAY_HALF_LIFE_S: Final[float] = 360.0          # §4.1 — longer half-life sustains a higher score
 CONFIDENCE_GATE: Final[float]   = 0.70           # §4.2 hard gate v1.0
-ZONE_CAP_FACTOR: Final[float]   = 1.5            # §4.2 per-zone cap multiplier
+ZONE_CAP_FACTOR: Final[float]   = 3.0            # §4.2 per-zone cap (raised so scores climb past ~33 in demos)
 LATE_ACCEPT_WINDOW_S: Final[float] = 10.0        # §4.2 back-date window
 BAS_MAX: Final[float]           = 100.0
 BAS_MIN: Final[float]           = 0.0
 
-# Band thresholds (§4.4)
-BAND_HOT_THRESHOLD: Final[float]  = 70.0
-BAND_WARM_THRESHOLD: Final[float] = 40.0
-BAND_HOT_EXPIRE: Final[float]     = 60.0         # alert auto-expires below 60
+# Band thresholds (§4.4) — lowered so WARM/HOT trigger at realistic live-demo levels
+BAND_HOT_THRESHOLD: Final[float]  = 62.0
+BAND_WARM_THRESHOLD: Final[float] = 34.0
+BAND_HOT_EXPIRE: Final[float]     = 52.0         # alert auto-expires below this
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Event weights — single source of truth (§3)

@@ -43,10 +43,12 @@ export interface Prediction {
   bas?:        number;                 // Buying Affinity Score 0-100
   band?:       BAMBand;
   keypoints?:  Keypoint[];             // 17 COCO keypoints, normalised
+  mask_poly?:  [number, number][];     // person silhouette polygon (normalised) for the body mesh
   posture?:    PostureAngles;          // tilt/alignment angles (degrees)
   top_events?: string[];              // recent event codes (E08, E10, …)
   is_staff?:   boolean;
   windows?:    number;
+  personNo?:   number;                 // sequential display number (Person 1, 2, 3…), assigned client-side
 }
 
 export interface ProductDetection {
