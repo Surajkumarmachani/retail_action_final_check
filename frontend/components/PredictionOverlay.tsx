@@ -5,10 +5,11 @@ import { Prediction, ProductDetection, Keypoint } from "@/lib/types";
 
 interface TrailPt { x: number; y: number; t: number; }
 interface Props {
-  predictions: Prediction[];
-  products:    ProductDetection[];
-  frameWidth:  number;
-  frameHeight: number;
+  predictions:  Prediction[];
+  products:     ProductDetection[];
+  frameWidth:   number;
+  frameHeight:  number;
+  showSkeleton?: boolean;   // server COCO-17 skeleton; off when the client 33-pt pose is drawn
 }
 
 type Box = [number, number, number, number];
@@ -37,7 +38,7 @@ const COCO_EDGES: [number, number][] = [
 
 const LERP_MS = 120;
 
-export function PredictionOverlay({ predictions, products, frameWidth, frameHeight }: Props) {
+export function PredictionOverlay({ predictions, products, frameWidth, frameHeight, showSkeleton = true }: Props) {
   const canvasRef      = useRef<HTMLCanvasElement>(null);
   const rafRef         = useRef(0);
   const predsRef       = useRef<Prediction[]>([]);
@@ -281,7 +282,7 @@ export function PredictionOverlay({ predictions, products, frameWidth, frameHeig
               return [f[0] + (t[0] - f[0]) * el, f[1] + (t[1] - f[1]) * el, t[2]] as Keypoint;
             })
           : p.keypoints;
-        if (kps && kps.length >= 17) {
+        if (showSkeleton && kps && kps.length >= 17) {
           const KX = (kp: Keypoint) => w - kp[0] * w;   // mirror to match CSS scaleX(-1)
           const KY = (kp: Keypoint) => kp[1] * h;
 

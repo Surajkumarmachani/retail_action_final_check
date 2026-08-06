@@ -7,6 +7,7 @@ import { Prediction, BAMEvent, BAMBand } from "@/lib/types";
 import { useWebcam, FRAME_SEND_SCALE } from "@/hooks/useWebcam";
 import { usePredictorSocket } from "@/hooks/useWebSocket";
 import { useObjectDetector, type DetObject } from "@/hooks/useObjectDetector";
+import { useHolisticLandmarks } from "@/hooks/useHolisticLandmarks";
 import { PredictionOverlay } from "./PredictionOverlay";
 import { PersonCard, MiniCard } from "./PersonCard";
 import { PostureTiltPanel } from "./PostureTiltPanel";
@@ -211,6 +212,7 @@ export function WebcamPredictor() {
 
   const { videoRef, captureCanvas, ready, error, captureFrame } = useWebcam();
   const productCanvasRef = useRef<HTMLCanvasElement>(null);
+  const meshCanvasRef    = useRef<HTMLCanvasElement>(null);
 
   const pushEvent = useCallback((ev: Omit<IntelEvent, "id">) => {
     const id = String(++eventIdRef.current);
@@ -318,6 +320,9 @@ export function WebcamPredictor() {
   // Client-side product detection — runs in-browser on the GPU, drawn on productCanvas.
   // Instant appear/disappear (no server round-trip).
   const { objects } = useObjectDetector(videoRef, productCanvasRef, connected && ready);
+
+  // Client-side face/hand mesh + eye tracking + gaze rays (no grid) — drawn on meshCanvas.
+  const { ready: meshReady } = useHolisticLandmarks(videoRef, meshCanvasRef, connected && ready);
 
   // Object-lock events from client detections (instant), per-label cooldown
   useEffect(() => {
@@ -472,6 +477,9 @@ export function WebcamPredictor() {
                   ● {hotCount} Hot Lead{hotCount > 1 ? "s" : ""}
                 </span>
               )}
+              <span className={`text-[7.5px] font-mono uppercase tracking-widest ${meshReady ? "text-cyan-400" : "text-gray-700"}`}>
+                ◆ Mesh
+              </span>
               <span className="text-[7.5px] font-mono text-gray-700">640×480</span>
             </div>
           </div>
@@ -500,8 +508,14 @@ export function WebcamPredictor() {
 
               {/* Server-rendered overlay: green skeleton + person boxes + BAM labels */}
               <div className="absolute inset-0 overflow-hidden">
-                <PredictionOverlay predictions={predictions} products={[]} frameWidth={frameW} frameHeight={frameH} />
+                <PredictionOverlay predictions={predictions} products={[]} frameWidth={frameW} frameHeight={frameH} showSkeleton={true} />
               </div>
+
+              {/* Client-side face/hand mesh + eyes + gaze rays (no grid) */}
+              <canvas
+                ref={meshCanvasRef}
+                className="pointer-events-none absolute inset-0 h-full w-full"
+              />
 
               {/* Client-side product boxes — instant, drawn locally (no server round-trip) */}
               <canvas

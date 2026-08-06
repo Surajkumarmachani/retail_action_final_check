@@ -35,7 +35,7 @@ async function createHolistic() {
     baseOptions: { modelAssetPath: MODEL_PATH, delegate: "GPU" },
     runningMode: "VIDEO",
     outputFaceBlendshapes: false,
-    outputPoseSegmentationMasks: false,
+    outputPoseSegmentationMasks: true,   // for the body boundary outline
   };
   try { return await HolisticLandmarker.createFromOptions(fileset, opts); }
   catch {
@@ -117,13 +117,22 @@ export function useHolisticLandmarks(
         const r = hol.detectForVideo(video, tsRef.current);
 
         const face  = r.faceLandmarks?.[0];
+        const pose  = r.poseLandmarks?.[0] as LM[] | undefined;
         const left  = r.leftHandLandmarks?.[0];
         const right = r.rightHandLandmarks?.[0];
         const hands: LM[][] = [left, right].filter(Boolean) as LM[][];
+        const mask  = r.poseSegmentationMasks?.[0];
 
-        const parts: HolisticParts = { face, hands, faceTess: tessRef.current ?? undefined };
-        // Enhancement only: draw face mesh + hands; the body skeleton + objects are server-rendered.
-        drawSkeleton(canvas, video, parts, { drawPose: false, drawObjects: false });
+        const parts: HolisticParts = {
+          face, pose, hands, poseMask: mask, faceTess: tessRef.current ?? undefined,
+        };
+        // Rich enhancement on the primary person: face mesh + hands + eyes/gaze + body boundary.
+        // The body SKELETON is server-rendered (YOLOv8-pose) so it covers ALL people + shoulders;
+        // Holistic is single-person, so drawing its pose here would only cover one + double up.
+        drawSkeleton(canvas, video, parts, {
+          drawPose: false, drawObjects: false, drawBoundary: true,
+        });
+        mask?.close?.();   // free the mask each frame
       } catch { /* frame error — skip */ }
       finally { busyRef.current = false; }
     }

@@ -1,0 +1,14 @@
+# Minimal runtime deps for the BAM backend (pose + product detect + scoring).
+# torch / torchvision are installed separately (CPU wheel) in the Dockerfile.
+# Deliberately EXCLUDES mediapipe, xgboost, scikit-learn, joblib, dill — the BAM
+# server no longer imports them (they were for the old Transformer predictor).
+
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+websockets>=12.0
+python-multipart>=0.0.9
+opencv-python-headless>=4.9.0
+ultralytics>=8.1.0          # YOLOv8 + ByteTrack (pulls numpy, pillow, etc.)
+numpy>=1.26.0
+httpx>=0.27.0               # firebase_auth: fetch Google JWKs
+PyJWT[crypto]>=2.8.0        # firebase_auth: verify RS256 ID tokens

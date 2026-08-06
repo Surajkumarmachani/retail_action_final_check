@@ -1,0 +1,20 @@
+# Keep the image small + never ship secrets
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.env
+.env.*
+serviceAccountKey.json          # not needed — FIREBASE_PROJECT_ID env var is used instead
+
+# Unused models (BAM uses only yolov8n-pose.pt + yolov8n.pt)
+artifacts/yolov8m.pt
+artifacts/yolov8n-seg.pt
+artifacts/best_combine_model_purchase_prediction.joblib
+artifacts/scaler.joblib
+
+# Dev-only / not needed at runtime
+bam/.venv/
+requirements.txt                # deploy uses requirements-deploy.txt
+export_scaler.py
+tests/

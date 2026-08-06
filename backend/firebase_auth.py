@@ -26,10 +26,14 @@ _jwks_expires_at: float = 0.0
 
 def init_firebase() -> None:
     global FIREBASE_PROJECT_ID
-    cred_path = os.environ.get("FIREBASE_CREDENTIALS_JSON", "./serviceAccountKey.json")
-    with open(cred_path) as f:
-        creds = json.load(f)
-    FIREBASE_PROJECT_ID = creds["project_id"]
+    # Prefer FIREBASE_PROJECT_ID env var (deploy-friendly — only the non-secret project id
+    # is needed for ID-token verification). Fall back to serviceAccountKey.json for local dev.
+    FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID")
+    if not FIREBASE_PROJECT_ID:
+        cred_path = os.environ.get("FIREBASE_CREDENTIALS_JSON", "./serviceAccountKey.json")
+        with open(cred_path) as f:
+            creds = json.load(f)
+        FIREBASE_PROJECT_ID = creds["project_id"]
     logger.info("Firebase project: %s  (JWT-only verification, no Admin SDK)", FIREBASE_PROJECT_ID)
 
 

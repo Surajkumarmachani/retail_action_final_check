@@ -26,6 +26,7 @@ export interface HolisticParts {
   face?:     LM[];        // ~478 face mesh incl. iris
   objects?:  ClientObject[]; // real-time detected products
   faceTess?: Conn[];      // FaceLandmarker.FACE_LANDMARKS_TESSELATION (~2600 edges) — the mesh grid
+  poseMask?: any;         // MediaPipe MPMask — pose segmentation mask (for the body boundary)
 }
 
 function connAB(c: Conn): [number, number] {
@@ -118,7 +119,12 @@ function vis(p: LM | undefined): boolean {
 }
 
 // ── Main draw ──────────────────────────────────────────────────────────────────────
-export interface DrawOpts { drawPose?: boolean; drawObjects?: boolean }
+export interface DrawOpts {
+  drawPose?:     boolean;
+  drawObjects?:  boolean;
+  drawBoundary?: boolean;   // draw the body silhouette outline from poseMask
+  poseColor?:    string;    // colour for the body skeleton bones/joints
+}
 
 export function drawSkeleton(
   canvas: HTMLCanvasElement,
@@ -126,7 +132,7 @@ export function drawSkeleton(
   parts:  HolisticParts,
   opts:   DrawOpts = {},
 ): PostureMetrics {
-  const { drawPose = true, drawObjects = true } = opts;
+  const { drawPose = true, drawObjects = true, drawBoundary = false, poseColor = C_BONE } = opts;
   const w = video.videoWidth, h = video.videoHeight;
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   const ctx = canvas.getContext("2d")!;
@@ -135,7 +141,10 @@ export function drawSkeleton(
   const X = (p: LM) => (1 - p.x) * w;   // mirror flip
   const Y = (p: LM) => p.y * h;
 
-  const { pose, hands, face, objects, faceTess } = parts;
+  const { pose, hands, face, objects, faceTess, poseMask } = parts;
+
+  // ── Body boundary (silhouette outline) — drawn first, behind everything ──────────
+  if (drawBoundary && poseMask) drawBodyOutline(ctx, w, h, poseMask);
 
   const metrics: PostureMetrics = {
     headTiltDeg: 0, leanDeg: 0,
@@ -277,8 +286,8 @@ export function drawSkeleton(
   // ── Pose skeleton ──────────────────────────────────────────────────────────────
   if (drawPose && pose && pose.length >= 33) {
     ctx.save();
-    ctx.strokeStyle = C_BONE; ctx.lineWidth = 3; ctx.lineCap = "round";
-    ctx.shadowColor = C_BONE; ctx.shadowBlur = 6;
+    ctx.strokeStyle = poseColor; ctx.lineWidth = 3; ctx.lineCap = "round";
+    ctx.shadowColor = poseColor; ctx.shadowBlur = 6;
     ctx.beginPath();
     for (const [a, b] of POSE_CONNECTIONS) {
       const pa = pose[a], pb = pose[b];
@@ -290,14 +299,14 @@ export function drawSkeleton(
 
     // Joint dots
     ctx.save();
-    ctx.shadowColor = C_BONE; ctx.shadowBlur = 5;
+    ctx.shadowColor = poseColor; ctx.shadowBlur = 5;
     for (let i = 0; i < pose.length; i++) {
       const p = pose[i];
       if (!vis(p)) continue;
       const major = POSE_MAJOR.includes(i);
       ctx.beginPath(); ctx.arc(X(p), Y(p), major ? 4.5 : 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = major ? "#ffffff" : C_JOINT; ctx.fill();
-      if (major) { ctx.beginPath(); ctx.arc(X(p), Y(p), 4.5, 0, Math.PI * 2); ctx.strokeStyle = C_BONE; ctx.lineWidth = 1.5; ctx.stroke(); }
+      ctx.fillStyle = major ? "#ffffff" : poseColor; ctx.fill();
+      if (major) { ctx.beginPath(); ctx.arc(X(p), Y(p), 4.5, 0, Math.PI * 2); ctx.strokeStyle = poseColor; ctx.lineWidth = 1.5; ctx.stroke(); }
     }
     ctx.restore();
 
@@ -354,6 +363,64 @@ export function drawSkeleton(
   }
 
   return metrics;
+}
+
+// ── Body boundary (silhouette outline from the pose segmentation mask) ──────────────
+const C_BOUND = "#22d3ee";                 // cyan boundary (contrasts with the green body)
+let _silA: HTMLCanvasElement | null = null;
+let _silB: HTMLCanvasElement | null = null;
+function silCanvas(which: "a" | "b", w: number, h: number): HTMLCanvasElement {
+  let c = which === "a" ? _silA : _silB;
+  if (!c) { c = document.createElement("canvas"); if (which === "a") _silA = c; else _silB = c; }
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  return c;
+}
+
+/**
+ * Draws a glowing outline around the body + a faint fill, from the MediaPipe pose
+ * segmentation mask. The outline "ring" is A − erode(A): draw the silhouette, then
+ * subtract 8 offset copies (destination-out) leaving a k-px border. Mirrored to match
+ * the CSS-flipped video.
+ */
+function drawBodyOutline(ctx: CanvasRenderingContext2D, w: number, h: number, mask: any) {
+  const mw = mask?.width | 0, mh = mask?.height | 0;
+  if (!mw || !mh) return;
+  let data: Float32Array | Uint8Array;
+  try { data = mask.getAsFloat32Array(); }
+  catch { try { data = mask.getAsUint8Array(); } catch { return; } }
+  const thr = data instanceof Float32Array ? 0.5 : 128;
+
+  // A = solid silhouette
+  const A = silCanvas("a", mw, mh);
+  const actx = A.getContext("2d")!;
+  actx.clearRect(0, 0, mw, mh);
+  const img = actx.createImageData(mw, mh);
+  const d = img.data;
+  for (let i = 0; i < mw * mh; i++) {
+    if (data[i] > thr) { const o = i * 4; d[o] = 34; d[o + 1] = 211; d[o + 2] = 238; d[o + 3] = 255; }
+  }
+  actx.putImageData(img, 0, 0);
+
+  // B = outline ring = A minus its erosion (8-direction destination-out)
+  const B = silCanvas("b", mw, mh);
+  const bctx = B.getContext("2d")!;
+  bctx.clearRect(0, 0, mw, mh);
+  bctx.drawImage(A, 0, 0);
+  bctx.globalCompositeOperation = "destination-out";
+  const k = Math.max(1, Math.round(mw / 128));
+  for (const [dx, dy] of [[k,0],[-k,0],[0,k],[0,-k],[k,k],[k,-k],[-k,k],[-k,-k]] as [number,number][])
+    bctx.drawImage(A, dx, dy);
+  bctx.globalCompositeOperation = "source-over";
+
+  // Composite onto the main canvas, mirrored (video is CSS scaleX(-1))
+  ctx.save();
+  ctx.translate(w, 0); ctx.scale(-1, 1);
+  ctx.globalAlpha = 0.07;                                   // faint body tint (covers the body)
+  ctx.drawImage(A, 0, 0, mw, mh, 0, 0, w, h);
+  ctx.globalAlpha = 0.9;
+  ctx.shadowColor = C_BOUND; ctx.shadowBlur = 6;            // glow on the boundary line
+  ctx.drawImage(B, 0, 0, mw, mh, 0, 0, w, h);
+  ctx.restore();
 }
 
 // ── Annotation chip ────────────────────────────────────────────────────────────────

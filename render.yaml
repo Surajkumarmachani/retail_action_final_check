@@ -1,0 +1,22 @@
+# Render Blueprint for the MACHANI BAM backend (FastAPI + WebSocket + YOLOv8).
+# Deploy: push to GitHub → Render → New → Blueprint → pick this repo.
+#
+# NOTE ON PLAN: torch + ultralytics + 2 YOLO models need ~1–1.5 GB RAM. The Free/Starter
+# 512 MB instances will likely OOM — use "standard" (2 GB). Downgrade only if it fits.
+
+services:
+  - type: web
+    name: machani-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: standard            # 2 GB RAM — required for torch/YOLO (starter/free may OOM)
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: FIREBASE_PROJECT_ID
+        value: retail-actions
+      - key: CORS_ORIGINS
+        sync: false           # set to your Vercel URL, e.g. https://your-app.vercel.app
+      - key: CV_WORKERS
+        value: "2"
