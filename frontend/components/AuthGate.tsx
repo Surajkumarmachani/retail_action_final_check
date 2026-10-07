@@ -4,6 +4,32 @@ import { GoogleAuthProvider, createUserWithEmailAndPassword, signInWithEmailAndP
 import { useState } from "react";
 import { auth } from "@/lib/firebase";
 
+// Turn Firebase error codes into something a user (or whoever sets up the project) can act on.
+function authErrorMessage(e: unknown): string {
+  const code = (e as { code?: string }).code ?? "";
+  switch (code) {
+    case "auth/unauthorized-domain":
+      return `This domain (${window.location.hostname}) is not authorised for sign-in. Add it in Firebase Console → Authentication → Settings → Authorized domains.`;
+    case "auth/operation-not-allowed":
+      return "This sign-in method is disabled. Enable it in Firebase Console → Authentication → Sign-in method.";
+    case "auth/popup-blocked":
+      return "The browser blocked the sign-in popup. Allow popups for this site and try again.";
+    case "auth/popup-closed-by-user":
+    case "auth/cancelled-popup-request":
+      return "Sign-in was cancelled.";
+    case "auth/invalid-credential":
+    case "auth/wrong-password":
+    case "auth/user-not-found":
+      return "Incorrect email or password.";
+    case "auth/email-already-in-use":
+      return "An account with this email already exists. Try signing in instead.";
+    case "auth/weak-password":
+      return "Password should be at least 6 characters.";
+    default:
+      return (e as Error).message;
+  }
+}
+
 export function AuthGate() {
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
@@ -17,14 +43,14 @@ export function AuthGate() {
     try {
       if (mode === "login") await signInWithEmailAndPassword(auth, email, password);
       else await createUserWithEmailAndPassword(auth, email, password);
-    } catch (e: unknown) { setError((e as Error).message); }
+    } catch (e: unknown) { setError(authErrorMessage(e)); }
     finally { setLoading(false); }
   };
 
   const googleSignIn = async () => {
     setError(null); setNotice(null); setLoading(true);
     try { await signInWithPopup(auth, new GoogleAuthProvider()); }
-    catch (e: unknown) { setError((e as Error).message); }
+    catch (e: unknown) { setError(authErrorMessage(e)); }
     finally { setLoading(false); }
   };
 
@@ -35,7 +61,7 @@ export function AuthGate() {
     try {
       await sendPasswordResetEmail(auth, email.trim());
       setNotice(`Password reset link sent to ${email.trim()}. Check your inbox (and spam).`);
-    } catch (e: unknown) { setError((e as Error).message); }
+    } catch (e: unknown) { setError(authErrorMessage(e)); }
     finally { setLoading(false); }
   };
 
@@ -120,7 +146,7 @@ export function AuthGate() {
         </div>
 
         <p className="mt-4 text-center text-[10px] text-gray-700">
-          Real-time retail behaviour AI powered by YOLOv8 + Transformer
+          Real-time retail behaviour AI powered by YOLOv8 + MediaPipe
         </p>
       </div>
     </div>

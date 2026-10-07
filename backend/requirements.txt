@@ -19,5 +19,6 @@ xgboost==1.7.6      # model saved with xgboost <=1.6; 1.7.x is the last compatib
 scikit-learn>=1.4.0         # StandardScaler
 numpy>=1.26.0
 
-# Firebase Admin SDK
-firebase-admin>=6.5.0
+# Firebase ID-token verification (see firebase_auth.py)
+httpx>=0.27.0
+PyJWT[crypto]>=2.8.0

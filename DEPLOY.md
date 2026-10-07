@@ -79,6 +79,9 @@ Set these Environment Variables in the Vercel project (Settings → Environment 
 
 Redeploy the frontend after setting them.
 
+Then add the Vercel domain to **Firebase Console → Authentication → Settings → Authorized
+domains**, or Google sign-in will fail on the deployed site.
+
 The MediaPipe model files under `frontend/public/mediapipe/` are served by Vercel as static
 assets (client-side product/mesh detection) — no backend involved.
 
