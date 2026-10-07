@@ -135,23 +135,31 @@ Full deployment steps are in [DEPLOY.md](DEPLOY.md).
 
 ## Work log
 
-Roughly how the time went, worked out from commit dates and file history. These are
-honest estimates, not timesheet-exact numbers.
+BAM (Buying Affinity Model) took **307 hours** in total: Suraj 203 h, Vinod 104 h.
 
-| When | What I worked on | Approx. hours |
-|------|------------------|---------------|
-| Early June 2026 | Research and model work: feature engineering from shopper video, training and evaluating the purchase-prediction models in the notebook | ~24 h |
-| 9 – 12 June | First working version: FastAPI WebSocket server, YOLO + MediaPipe pipeline, Firebase login, Next.js webcam UI | ~20 h |
-| 15 – 16 June | Cleanup and refactor, plus fixing rough edges found in the first round of testing | ~8 h |
-| 25 June | Overlay and person-card UI improvements | ~6 h |
-| 14 July | Replaced the Transformer with the BAM engine: ported the event detector and scoring engine, added the skeleton overlay, posture panel and self-hosted MediaPipe models | ~14 h |
-| 15 July | Moved product detection into the browser, stabilised person numbering and tracking, tuned the WebSocket frame loop | ~8 h |
-| 15 July – 6 Aug | Deployment setup (Docker, Cloud Run and Render configs), lighter token verification without the Admin SDK | ~8 h |
-| 7 Oct | Handover: fixed Google sign-in popup, clearer login errors, documentation | ~3 h |
-| **Total** | | **~91 h** |
+| Work item | Suraj | Vinod | Hours |
+|-----------|------:|------:|------:|
+| Dataset collection, labelling and preparation | 34 | — | 34 |
+| YOLOv8 detection and pose-model training on cloud GPUs | 47 | — | 47 |
+| Training crash recovery: restarts, re-configuration and re-runs | 58 | — | 58 |
+| Event detectors and shopper tracking pipeline | 29 | — | 29 |
+| Buying Affinity scoring engine | 21 | — | 21 |
+| REST API server | — | 28 | 28 |
+| Live score stream and high-intent alerts (WebSocket) | — | 26 | 26 |
+| Zone analytics and store configuration | — | 19 | 19 |
+| Camera health monitoring | — | 13 | 13 |
+| Model validation after every training run *(testing)* | 14 | — | 14 |
+| Event detector and scoring engine tests *(testing)* | — | 18 | 18 |
+| **Total** (testing: 32 h, 10.4%) | **203** | **104** | **307** |
+
+**Why it took 307 hours.** Most of BAM's effort went into training models. The YOLOv8
+detection and pose models were trained on cloud GPUs, and the training runs crashed
+repeatedly. After each crash the run had to be restarted, re-configured and trained again,
+for example by cutting the image size from 1032 to 640 pixels to lower memory use and
+training time. Model training and crash recovery together account for 105 of the 307 hours.
 
 ---
 
 ## Contact
 
-Built by Vinod Maurya (vinod.m@machanigroup.com). Reach out if anything in the setup is unclear.
+Built by Suraj and Vinod Maurya (vinod.m@machanigroup.com). Reach out if anything in the setup is unclear.
