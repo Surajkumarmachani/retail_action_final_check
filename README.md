@@ -104,6 +104,18 @@ Things that live outside the code and have to be done in the consoles:
 > Firebase Auth, the authorized-domains list and (optionally) the key restriction in step 6.
 > The secret is `backend/serviceAccountKey.json`, which is git-ignored and never committed.
 
+### Live deployment
+
+| Part | Where | URL |
+|------|-------|-----|
+| Frontend | Vercel | https://retail-actions.vercel.app |
+| Backend | Google Cloud Run (project `retail-actions`, `us-central1`, service `machani-backend`) | https://machani-backend-598239443042.us-central1.run.app/health |
+
+On Vercel, `NEXT_PUBLIC_WS_URL` must be `wss://machani-backend-598239443042.us-central1.run.app/ws/predict`.
+The backend scales to zero when idle and runs at most one instance. A ₹500/month budget alert
+on the billing account emails when spending passes 50%, 90% and 100%. To redeploy after
+backend changes, run `cd backend && bash deploy-cloudrun.sh`.
+
 Full deployment steps are in [DEPLOY.md](DEPLOY.md).
 
 ---
