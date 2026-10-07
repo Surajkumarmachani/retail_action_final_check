@@ -16,7 +16,7 @@ set -euo pipefail
 PROJECT_ID="${PROJECT_ID:-retail-actions}"          # your Firebase/GCP project id
 REGION="${REGION:-us-central1}"
 SERVICE="${SERVICE:-machani-backend}"
-CORS_ORIGINS="${CORS_ORIGINS:-https://your-app.vercel.app}"
+CORS_ORIGINS="${CORS_ORIGINS:-https://retail-actions.vercel.app,http://localhost:3000}"
 
 echo "Deploying '$SERVICE' to project '$PROJECT_ID' ($REGION)…"
 
@@ -25,7 +25,9 @@ gcloud services enable run.googleapis.com cloudbuild.googleapis.com \
   artifactregistry.googleapis.com --project "$PROJECT_ID"
 
 # Build from ./backend (uses the Dockerfile) and deploy.
-# --no-cpu-throttling keeps the CPU allocated for the whole WebSocket connection.
+# Request-based billing (the default): an open WebSocket counts as an active request, so
+# CPU stays allocated while someone is streaming and nothing is billed when idle.
+# --max-instances 1 caps spend; a light demo fits in Cloud Run's monthly free tier.
 # --timeout 3600 = max WS connection length (Cloud Run caps at 60 min; client auto-reconnects).
 gcloud run deploy "$SERVICE" \
   --project "$PROJECT_ID" \
@@ -36,11 +38,10 @@ gcloud run deploy "$SERVICE" \
   --memory 2Gi \
   --cpu 2 \
   --timeout 3600 \
-  --no-cpu-throttling \
   --concurrency 4 \
   --min-instances 0 \
-  --max-instances 3 \
-  --set-env-vars "FIREBASE_PROJECT_ID=${PROJECT_ID},CORS_ORIGINS=${CORS_ORIGINS},CV_WORKERS=2"
+  --max-instances 1 \
+  --set-env-vars "^@^FIREBASE_PROJECT_ID=${PROJECT_ID}@CORS_ORIGINS=${CORS_ORIGINS}@CV_WORKERS=2"
 
 echo
 echo "Done. Service URL is printed above."

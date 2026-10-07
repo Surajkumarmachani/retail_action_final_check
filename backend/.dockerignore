@@ -5,7 +5,8 @@ __pycache__/
 *.pyc
 .env
 .env.*
-serviceAccountKey.json          # not needed — FIREBASE_PROJECT_ID env var is used instead
+# Not needed: the FIREBASE_PROJECT_ID env var is used instead
+serviceAccountKey.json
 
 # Unused models (BAM uses only yolov8n-pose.pt + yolov8n.pt)
 artifacts/yolov8m.pt
@@ -15,6 +16,7 @@ artifacts/scaler.joblib
 
 # Dev-only / not needed at runtime
 bam/.venv/
-requirements.txt                # deploy uses requirements-deploy.txt
+# Deploy uses requirements-deploy.txt
+requirements.txt
 export_scaler.py
 tests/
