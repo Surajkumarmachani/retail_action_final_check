@@ -30,6 +30,11 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+# Load backend/.env before anything reads os.environ (pipeline/bam_pipeline reads
+# BAM_* at import time). No-op in Docker/Cloud Run, where .env isn't shipped.
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
